@@ -138,7 +138,8 @@ def draw_lobby_scene(surface, mouse_pos):
     # 繪製輸入框
     font_input = get_font(16)
     if connection_mode == "HOST":
-        draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP" and connection_mode == "HOST"), "本機綁定 IP 位址 (Host)", font_input)
+        display_ip = "0.0.0.0 (本機監聽)"
+        draw_input_box(surface, ip_input_rect, display_ip, False, "主機 IP 位址 (Host)", font_input)
     else:
         draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP" and connection_mode == "CLIENT"), "伺服器 IP 位址 (Host)", font_input)
         
@@ -280,8 +281,8 @@ def main():
                 # 大廳狀態下的點擊偵測
                 # ------------------------------------------
                 if game.game_phase == LOBBY:
-                    # 點擊 IP 輸入框 (在 HOST 與 CLIENT 模式皆啟用)
-                    if ip_input_rect.collidepoint(mouse_pos) and connection_mode != "OFFLINE":
+                    # 點擊 IP 輸入框 (僅在 CLIENT 模式下啟用)
+                    if ip_input_rect.collidepoint(mouse_pos) and connection_mode == "CLIENT":
                         active_input_field = "IP"
                     # 點擊 Port 輸入框 (非離線模式下啟用)
                     elif port_input_rect.collidepoint(mouse_pos) and connection_mode != "OFFLINE":
