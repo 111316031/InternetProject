@@ -205,16 +205,17 @@ class EcardGameUI:
         self.game_manager.resolve_tie()
         tie_index = len(self.uicards_tie_pile) // 2
         
-        self.uicard_played_cpu.target_x = 790.0
-        self.uicard_played_cpu.target_y = float(130 + tie_index * 45)
-        self.uicard_played_cpu.face_up = True
-        
-        self.uicard_played_player.target_x = 880.0
-        self.uicard_played_player.target_y = float(130 + tie_index * 45)
-        
-        self.uicards_tie_pile.append(self.uicard_played_cpu)
-        self.uicards_tie_pile.append(self.uicard_played_player)
-        self.game_manager.game_phase = 5  # TIE_SLIDING
+        if self.uicard_played_cpu and self.uicard_played_player:
+            self.uicard_played_cpu.target_x = 790.0
+            self.uicard_played_cpu.target_y = float(130 + tie_index * 45)
+            self.uicard_played_cpu.face_up = True
+            
+            self.uicard_played_player.target_x = 880.0
+            self.uicard_played_player.target_y = float(130 + tie_index * 45)
+            
+            self.uicards_tie_pile.append(self.uicard_played_cpu)
+            self.uicards_tie_pile.append(self.uicard_played_player)
+            self.game_manager.game_phase = 5  # TIE_SLIDING
 
     def handle_timer_expiration(self):
         """處理延遲定時器到期"""
@@ -324,32 +325,34 @@ class EcardGameUI:
                     uc.target_y = 520.0
                     
         elif self.game_manager.game_phase == 2:  # ANIMATING_PLAY
-            p_arrived = abs(self.uicard_played_player.x - self.uicard_played_player.target_x) < 1.0 and abs(self.uicard_played_player.y - self.uicard_played_player.target_y) < 1.0
-            c_arrived = (self.uicard_played_cpu is not None) and (abs(self.uicard_played_cpu.x - self.uicard_played_cpu.target_x) < 1.0 and abs(self.uicard_played_cpu.y - self.uicard_played_cpu.target_y) < 1.0)
-            if p_arrived and c_arrived:
-                self.uicard_played_player.x, self.uicard_played_player.y = self.uicard_played_player.target_x, self.uicard_played_player.target_y
-                self.uicard_played_cpu.x, self.uicard_played_cpu.y = self.uicard_played_cpu.target_x, self.uicard_played_cpu.target_y
-                
-                self.game_manager.game_phase = 3  # REVEALING
-                self.uicard_played_cpu.start_flip()
-                
+            if self.uicard_played_player and self.uicard_played_cpu:
+                p_arrived = abs(self.uicard_played_player.x - self.uicard_played_player.target_x) < 1.0 and abs(self.uicard_played_player.y - self.uicard_played_player.target_y) < 1.0
+                c_arrived = abs(self.uicard_played_cpu.x - self.uicard_played_cpu.target_x) < 1.0 and abs(self.uicard_played_cpu.y - self.uicard_played_cpu.target_y) < 1.0
+                if p_arrived and c_arrived:
+                    self.uicard_played_player.x, self.uicard_played_player.y = self.uicard_played_player.target_x, self.uicard_played_player.target_y
+                    self.uicard_played_cpu.x, self.uicard_played_cpu.y = self.uicard_played_cpu.target_x, self.uicard_played_cpu.target_y
+                    
+                    self.game_manager.game_phase = 3  # REVEALING
+                    self.uicard_played_cpu.start_flip()
+                    
         elif self.game_manager.game_phase == 3:  # REVEALING
-            if not self.uicard_played_cpu.is_flipping:
+            if self.uicard_played_cpu and not self.uicard_played_cpu.is_flipping:
                 self.trigger_evaluation()
                 
         elif self.game_manager.game_phase == 5:  # TIE_SLIDING
-            p_arrived = abs(self.uicard_played_player.x - self.uicard_played_player.target_x) < 1.0 and abs(self.uicard_played_player.y - self.uicard_played_player.target_y) < 1.0
-            c_arrived = abs(self.uicard_played_cpu.x - self.uicard_played_cpu.target_x) < 1.0 and abs(self.uicard_played_cpu.y - self.uicard_played_cpu.target_y) < 1.0
-            if p_arrived and c_arrived:
-                self.uicard_played_player.x, self.uicard_played_player.y = self.uicard_played_player.target_x, self.uicard_played_player.target_y
-                self.uicard_played_cpu.x, self.uicard_played_cpu.y = self.uicard_played_cpu.target_x, self.uicard_played_cpu.target_y
-                
-                self.uicard_played_player = None
-                self.uicard_played_cpu = None
-                self.game_manager.resolve_tie()
-                
-                if self.game_manager.game_phase == 1:  # PLAYING
-                    self.sync_hand_layouts(initial=False)
+            if self.uicard_played_player and self.uicard_played_cpu:
+                p_arrived = abs(self.uicard_played_player.x - self.uicard_played_player.target_x) < 1.0 and abs(self.uicard_played_player.y - self.uicard_played_player.target_y) < 1.0
+                c_arrived = abs(self.uicard_played_cpu.x - self.uicard_played_cpu.target_x) < 1.0 and abs(self.uicard_played_cpu.y - self.uicard_played_cpu.target_y) < 1.0
+                if p_arrived and c_arrived:
+                    self.uicard_played_player.x, self.uicard_played_player.y = self.uicard_played_player.target_x, self.uicard_played_player.target_y
+                    self.uicard_played_cpu.x, self.uicard_played_cpu.y = self.uicard_played_cpu.target_x, self.uicard_played_cpu.target_y
+                    
+                    self.uicard_played_player = None
+                    self.uicard_played_cpu = None
+                    self.game_manager.resolve_tie()
+                    
+                    if self.game_manager.game_phase == 1:  # PLAYING
+                        self.sync_hand_layouts(initial=False)
 
     def draw(self, surface, mouse_pos):
         # 繪製背景與頂部

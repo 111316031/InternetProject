@@ -101,8 +101,9 @@ class NetworkManager:
         self.wins_host = 0
         self.wins_client = 0
         
+        conn = self.connection
         # 模擬模式 fallback
-        if not self.connection:
+        if not conn:
             self.is_connected = True
             if self.on_connected:
                 self.on_connected()
@@ -113,7 +114,7 @@ class NetworkManager:
         def listen_thread():
             try:
                 # 呼叫 C 端監聽 Server，並取得包裝好的 Python socket 物件 (這會阻塞直到 client 連線)
-                py_socket = self.connection.start_server(self.server_port)
+                py_socket = conn.start_server(self.server_port)
                 if py_socket:
                     self.sock = py_socket
                     self.sock.setblocking(False)  # 設為非阻塞
