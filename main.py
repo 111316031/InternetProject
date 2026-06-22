@@ -41,7 +41,8 @@ ecard_game_instance = None
 # 大廳文字輸入與連線設定
 server_ip = "127.0.0.1"
 server_port = "8888"
-is_offline = True  # 預設為離線單機 (AI 對戰)
+connection_mode = "OFFLINE"  # 預設為離線單機 (AI 對戰)；支援 "OFFLINE", "HOST", "CLIENT"
+is_waiting_connection = False # 主機開房等待對手連線狀態
 active_input_field = None  # 當前聚焦輸入框 ("IP", "PORT" 或 None)
 
 connection_status_msg = "目前為單機離線模式，可直接啟動對決"
@@ -136,22 +137,39 @@ def draw_lobby_scene(surface, mouse_pos):
     
     # 繪製輸入框
     font_input = get_font(16)
-    draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP"), "伺服器 IP 位址 (Host)", font_input)
-    draw_input_box(surface, port_input_rect, server_port, (active_input_field == "PORT"), "連接埠 (Port)", font_input)
+    if connection_mode == "HOST":
+        draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP" and connection_mode == "HOST"), "本機綁定 IP 位址 (Host)", font_input)
+    else:
+        draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP" and connection_mode == "CLIENT"), "伺服器 IP 位址 (Host)", font_input)
+        
+    draw_input_box(surface, port_input_rect, server_port, (active_input_field == "PORT" and connection_mode != "OFFLINE"), "連接埠 (Port)", font_input)
     
     # 模式切換按鈕
     toggle_hover = toggle_mode_rect.collidepoint(mouse_pos)
-    mode_text = "模式: 離線單機 (AI)" if is_offline else "模式: 網路連線 (Socket)"
-    mode_bg = (30, 50, 80) if is_offline else (200, 160, 20)
-    mode_hover_bg = (40, 65, 105) if is_offline else (170, 130, 15)
-    mode_txt_color = (255, 255, 255) if is_offline else (15, 15, 20)
+    if connection_mode == "OFFLINE":
+        mode_text = "模式: 離線單機 (AI)"
+        mode_bg = (30, 50, 80)
+        mode_hover_bg = (40, 65, 105)
+        mode_txt_color = (255, 255, 255)
+    elif connection_mode == "HOST":
+        mode_text = "模式: 網路連線 (開房 Host)"
+        mode_bg = (20, 120, 80)
+        mode_hover_bg = (25, 150, 100)
+        mode_txt_color = (255, 255, 255)
+    else:
+        mode_text = "模式: 網路連線 (加入 Client)"
+        mode_bg = (200, 160, 20)
+        mode_hover_bg = (170, 130, 15)
+        mode_txt_color = (15, 15, 20)
+        
     draw_button(surface, toggle_mode_rect, mode_text, mode_bg, mode_hover_bg, mode_txt_color, toggle_hover, get_font(14, bold=True))
     
-    # 測試連線按鈕 (離線模式下禁用/變灰)
-    test_hover = test_conn_rect.collidepoint(mouse_pos) and not is_offline
-    test_bg = (50, 50, 55) if not is_offline else (30, 30, 32)
-    test_hover_bg = (70, 70, 78) if not is_offline else (30, 30, 32)
-    test_txt_color = (220, 220, 220) if not is_offline else (90, 90, 95)
+    # 測試連線按鈕 (僅在 CLIENT 模式下啟用/非變灰)
+    test_enabled = (connection_mode == "CLIENT")
+    test_hover = test_conn_rect.collidepoint(mouse_pos) and test_enabled
+    test_bg = (50, 50, 55) if test_enabled else (30, 30, 32)
+    test_hover_bg = (70, 70, 78) if test_enabled else (30, 30, 32)
+    test_txt_color = (220, 220, 220) if test_enabled else (90, 90, 95)
     draw_button(surface, test_conn_rect, "測試連線", test_bg, test_hover_bg, test_txt_color, test_hover, get_font(14))
     
     # 顯示連線狀態提示
@@ -218,7 +236,7 @@ def draw_game_scene(surface, mouse_pos):
 # ==========================================
 def main():
     global game, rps_game_instance, ecard_game_instance
-    global server_ip, server_port, is_offline, active_input_field
+    global server_ip, server_port, connection_mode, active_input_field, is_waiting_connection
     global connection_status_msg, connection_status_color
     
     pygame.init()
@@ -237,6 +255,13 @@ def main():
         # 全域輪詢網路通訊
         net_manager.poll()
         
+        # 主機開房連線完成後，自動跳轉進入遊戲介面
+        if connection_mode == "HOST" and is_waiting_connection and net_manager.is_connected:
+            is_waiting_connection = False
+            ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
+            connection_status_msg = "對手已連入！遊戲啟動中。"
+            connection_status_color = (100, 255, 100)
+            
         # 偵測輸入事件
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -255,44 +280,61 @@ def main():
                 # 大廳狀態下的點擊偵測
                 # ------------------------------------------
                 if game.game_phase == LOBBY:
-                    # 點擊 IP 輸入框
-                    if ip_input_rect.collidepoint(mouse_pos):
+                    # 點擊 IP 輸入框 (在 HOST 與 CLIENT 模式皆啟用)
+                    if ip_input_rect.collidepoint(mouse_pos) and connection_mode != "OFFLINE":
                         active_input_field = "IP"
-                    # 點擊 Port 輸入框
-                    elif port_input_rect.collidepoint(mouse_pos):
+                    # 點擊 Port 輸入框 (非離線模式下啟用)
+                    elif port_input_rect.collidepoint(mouse_pos) and connection_mode != "OFFLINE":
                         active_input_field = "PORT"
                     else:
                         active_input_field = None
                         
                     # 點擊模式切換按鈕
                     if toggle_mode_rect.collidepoint(mouse_pos):
-                        is_offline = not is_offline
-                        if is_offline:
-                            net_manager.disconnect()
+                        is_waiting_connection = False
+                        net_manager.disconnect()
+                        
+                        if connection_mode == "OFFLINE":
+                            connection_mode = "HOST"
+                            connection_status_msg = "切換為開房模式，啟動遊戲時將啟動本機伺服器等待連線"
+                            connection_status_color = (200, 200, 100)
+                        elif connection_mode == "HOST":
+                            connection_mode = "CLIENT"
+                            connection_status_msg = "切換為聯機模式，啟動遊戲時將連線至指定主機 IP"
+                            connection_status_color = (200, 200, 100)
+                        else:
+                            connection_mode = "OFFLINE"
                             connection_status_msg = "目前為單機離線模式，可直接啟動對決"
                             connection_status_color = (150, 150, 160)
-                        else:
-                            connection_status_msg = "切換為網路模式，啟動遊戲時將自動連線"
-                            connection_status_color = (200, 200, 100)
                             
-                    # 點擊測試連線按鈕
-                    elif test_conn_rect.collidepoint(mouse_pos) and not is_offline:
+                    # 點擊測試連線按鈕 (僅在 CLIENT 模式下啟用)
+                    elif test_conn_rect.collidepoint(mouse_pos) and connection_mode == "CLIENT":
                         test_connection_async()
                         
                     # 點擊啟動「國王與奴隸」遊戲
                     elif game_ecard_rect.collidepoint(mouse_pos):
-                        if is_offline:
+                        if connection_mode == "OFFLINE":
                             # 進入離線模式 E-Card
                             ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=True)
-                        else:
-                            # 網路連線模式下啟動 Socket 連線
-                            connection_status_msg = "嘗試與伺服器連線中..."
+                        elif connection_mode == "HOST":
+                            # 網路連線模式下 - Host 開房監聽
+                            connection_status_msg = "開房監聽中，等待對手連入..."
+                            connection_status_color = (200, 200, 100)
+                            success, msg = net_manager.host(server_port)
+                            if success:
+                                is_waiting_connection = True
+                            else:
+                                connection_status_msg = f"開房失敗: {msg}"
+                                connection_status_color = (255, 100, 100)
+                        elif connection_mode == "CLIENT":
+                            # 網路連線模式下 - Client 連線
+                            connection_status_msg = "嘗試與主機連線中..."
                             connection_status_color = (200, 200, 100)
                             success, msg = net_manager.connect(server_ip, server_port)
                             if success:
                                 ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
                             else:
-                                connection_status_msg = f"啟動失敗: {msg}"
+                                connection_status_msg = f"連線失敗: {msg}"
                                 connection_status_color = (255, 100, 100)
                                 
                     # 點擊啟動「限定剪刀石頭布」遊戲
