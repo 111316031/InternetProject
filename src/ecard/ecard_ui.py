@@ -148,6 +148,11 @@ class EcardGameUI:
             self.uicard_played_player.target_x = 455.0
             self.uicard_played_player.target_y = 360.0
             
+            # 同步更新邏輯層的出牌狀態，防止 evaluate_clash() 時為 None 導致閃退
+            self.game_manager.player_played = uicard.card_data
+            if uicard.card_data in self.game_manager.player_hand:
+                self.game_manager.player_hand.remove(uicard.card_data)
+            
             self.net_manager.send_data({
                 "action": "play_card",
                 "card_id": uicard.card_id,
