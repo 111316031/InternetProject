@@ -241,7 +241,7 @@ def draw_game_scene(surface, mouse_pos):
 def main():
     global game, rps_game_instance, ecard_game_instance
     global server_ip, server_port, connection_mode, active_input_field, is_waiting_connection
-    global connection_status_msg, connection_status_color
+    global connection_status_msg, connection_status_color, player_name
     
     pygame.init()
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
