@@ -141,6 +141,9 @@ class EcardGame:
 
     def evaluate_clash(self):
         """判定打出卡牌的克制關係與輸贏"""
+        if self.player_played is None or self.cpu_played is None:
+            return "ERROR", "無效的對決：出牌資料缺失！"
+            
         p_type = self.player_played.card_type
         c_type = self.cpu_played.card_type
         
