@@ -3,3 +3,10 @@ __pycache__/
 *$py.class
 .pytest_cache/
 .DS_Store
+
+# C cache
+*.exe
+*.dll
+*.so
+*.o
+*.a
