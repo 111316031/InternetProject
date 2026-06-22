@@ -56,15 +56,17 @@ uv sync
 
 ### 3. 編譯 C 語言連線核心庫 (DLL)
 專案的網路連線模組使用 C 語言編譯的動態庫，以提供最佳性能。
-請確保您已安裝 `gcc` 編譯器，並在專案根目錄下執行以下指令編譯：
+我們已經寫好了 [Makefile](file:///D:/Code/C/NetProgramming/InternetProject/Makefile)，您可以直接在專案根目錄下使用 `make` 進行編譯：
 
-* **Windows**:
-  ```powershell
-  gcc -shared -Wall -Wextra -o connection.dll src/connection/infrastructure/tcp_connection.c -lws2_32
-  ```
-* **Linux / macOS**:
+* **編譯動態連結庫**：
   ```bash
-  gcc -shared -Wall -Wextra -fPIC -o connection.so src/connection/infrastructure/tcp_connection.c
+  make
+  ```
+  *(在 Windows 下會自動生成 `connection.dll`；在 Linux/macOS 下會自動生成 `connection.so` 或 `connection.dylib`)*
+
+* **清除編譯結果**：
+  ```bash
+  make clean
   ```
 
 ### 4. 運行遊戲大廳
