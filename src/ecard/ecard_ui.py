@@ -177,8 +177,28 @@ class EcardGameUI:
         c_data = ecard_logic.CardData(opp_type, True, opp_id)
         self.game_manager.cpu_played = c_data
         
-        if len(self.uicards_cpu) > 0:
-            cpu_card = self.uicards_cpu.pop(0)
+        # 1. 同步移出邏輯層中的卡牌，避免殘留造成結算手牌公開異常
+        cpu_data = None
+        for cd in self.game_manager.cpu_hand:
+            if cd.card_type == opp_type:
+                cpu_data = cd
+                break
+        if cpu_data:
+            self.game_manager.cpu_hand.remove(cpu_data)
+            
+        # 2. 尋找視覺層中匹配卡牌型態的 UI 物件
+        cpu_card = None
+        for uc in self.uicards_cpu:
+            if uc.card_type == opp_type:
+                cpu_card = uc
+                break
+                
+        # 降級防護：若沒有找到同型態的卡片，則隨機取第一張
+        if not cpu_card and len(self.uicards_cpu) > 0:
+            cpu_card = self.uicards_cpu[0]
+            
+        if cpu_card:
+            self.uicards_cpu.remove(cpu_card)
             cpu_card.card_data = c_data
             cpu_card.card_id = opp_id
             cpu_card.card_type = opp_type
