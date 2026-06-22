@@ -212,7 +212,7 @@ class EcardGameUI:
 
     def trigger_evaluation(self):
         """結算勝負並執行翻牌計時"""
-        result, details = self.game_manager.evaluate_clash()
+        result, details = self.game_manager.evaluate_clash(self.is_offline)
         if result == "TIE":
             self.active_timer = 1500
         else:
@@ -259,6 +259,9 @@ class EcardGameUI:
             reset_btn_rect = pygame.Rect(870, 12, 110, 26)
             if reset_btn_rect.collidepoint(mouse_pos):
                 self.game_manager.reset_scores()
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.wins_host = 0
+                    self.net_manager.wins_client = 0
                 self.show_result_modal = False
                 self.uicards_player = []
                 self.uicards_cpu = []

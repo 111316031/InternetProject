@@ -139,7 +139,7 @@ class EcardGame:
         self.status_message = "對決進行中，卡牌已配置..."
         return p_card, cpu_card
 
-    def evaluate_clash(self):
+    def evaluate_clash(self, is_offline=True):
         """判定打出卡牌的克制關係與輸贏"""
         if self.player_played is None or self.cpu_played is None:
             return "ERROR", "無效的對決：出牌資料缺失！"
@@ -181,11 +181,13 @@ class EcardGame:
                 reason = "平民 鎮壓奴隸！電腦防守成功。"
                 
         if winner == "Player":
-            self.wins_player += 1
+            if is_offline:
+                self.wins_player += 1
             self.round_winner = "Player"
             self.status_message = f"【勝利】{reason}"
         else:
-            self.wins_cpu += 1
+            if is_offline:
+                self.wins_cpu += 1
             self.round_winner = "CPU"
             self.status_message = f"【失敗】{reason}"
             
