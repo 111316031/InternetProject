@@ -41,9 +41,10 @@ ecard_game_instance = None
 # 大廳文字輸入與連線設定
 server_ip = "127.0.0.1"
 server_port = "8888"
+player_name = "Player"  # 玩家設定的暱稱
 connection_mode = "OFFLINE"  # 預設為離線單機 (AI 對戰)；支援 "OFFLINE", "HOST", "CLIENT"
 is_waiting_connection = False # 主機開房等待對手連線狀態
-active_input_field = None  # 當前聚焦輸入框 ("IP", "PORT" 或 None)
+active_input_field = None  # 當前聚焦輸入框 ("IP", "PORT", "NAME" 或 None)
 
 connection_status_msg = "目前為單機離線模式，可直接啟動對決"
 connection_status_color = (150, 150, 160)
@@ -51,8 +52,9 @@ connection_status_color = (150, 150, 160)
 # 各按鈕的點擊感應區
 toggle_mode_rect = pygame.Rect(280, 250, 180, 35)
 test_conn_rect = pygame.Rect(540, 250, 180, 35)
-ip_input_rect = pygame.Rect(280, 190, 180, 30)
-port_input_rect = pygame.Rect(540, 190, 80, 30)
+ip_input_rect = pygame.Rect(200, 190, 180, 30)       # 寬度調整並向左移
+port_input_rect = pygame.Rect(410, 190, 80, 30)      # 向左移
+name_input_rect = pygame.Rect(520, 190, 180, 30)      # 新增名字輸入框區
 game_ecard_rect = pygame.Rect(200, 390, 280, 160)
 game_locked_rect = pygame.Rect(520, 390, 280, 160)
 exit_btn_rect = pygame.Rect(400, 590, 200, 45)
@@ -144,6 +146,7 @@ def draw_lobby_scene(surface, mouse_pos):
         draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP" and connection_mode == "CLIENT"), "伺服器 IP 位址 (Host)", font_input)
         
     draw_input_box(surface, port_input_rect, server_port, (active_input_field == "PORT" and connection_mode != "OFFLINE"), "連接埠 (Port)", font_input)
+    draw_input_box(surface, name_input_rect, player_name, (active_input_field == "NAME"), "您的名字 (Name)", font_input)
     
     # 模式切換按鈕
     toggle_hover = toggle_mode_rect.collidepoint(mouse_pos)
@@ -287,6 +290,9 @@ def main():
                     # 點擊 Port 輸入框 (非離線模式下啟用)
                     elif port_input_rect.collidepoint(mouse_pos) and connection_mode != "OFFLINE":
                         active_input_field = "PORT"
+                    # 點擊 名字 輸入框 (任何模式皆可點選)
+                    elif name_input_rect.collidepoint(mouse_pos):
+                        active_input_field = "NAME"
                     else:
                         active_input_field = None
                         
@@ -314,6 +320,8 @@ def main():
                         
                     # 點擊啟動「國王與奴隸」遊戲
                     elif game_ecard_rect.collidepoint(mouse_pos):
+                        # 同步玩家名字到 net_manager 供連線層調用
+                        net_manager.player_name = player_name
                         if connection_mode == "OFFLINE":
                             # 進入離線模式 E-Card
                             ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=True)
@@ -355,6 +363,8 @@ def main():
                             server_ip = server_ip[:-1]
                         elif active_input_field == "PORT":
                             server_port = server_port[:-1]
+                        elif active_input_field == "NAME":
+                            player_name = player_name[:-1]
                     elif event.key in (pygame.K_RETURN, pygame.K_ESCAPE):
                         active_input_field = None
                     else:
@@ -368,6 +378,10 @@ def main():
                                 # 限制 Port 長度為 5 且限為數字
                                 if len(server_port) < 5 and char.isdigit():
                                     server_port += char
+                            elif active_input_field == "NAME":
+                                # 限制名字長度為 12
+                                if len(player_name) < 12:
+                                    player_name += char
                                     
         # 位置更新與畫面渲染
         if game.game_phase == RPS_GAME and rps_game_instance is not None:

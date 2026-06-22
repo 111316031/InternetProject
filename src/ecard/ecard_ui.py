@@ -21,6 +21,10 @@ class EcardGameUI:
         self.net_manager = net_manager
         self.is_offline = is_offline
         
+        # 玩家與對手名字
+        self.player_name = self.net_manager.player_name if hasattr(self.net_manager, "player_name") else "玩家"
+        self.opponent_name = "電腦" if is_offline else "對手"
+
         # 遊戲內卡牌動畫管理列表
         self.uicards_player = []
         self.uicards_cpu = []
@@ -52,7 +56,12 @@ class EcardGameUI:
         """連線模式下，接收來自伺服器的自定義封包"""
         action = data.get("action")
         
-        if action == "opponent_played":
+        if action == "sync_names":
+            self.player_name = data.get("player_name", self.player_name)
+            self.opponent_name = data.get("opponent_name", self.opponent_name)
+            print(f"[UI] Sync Names - Player: {self.player_name}, Opponent: {self.opponent_name}")
+            
+        elif action == "opponent_played":
             opp_type = data.get("card_type")
             opp_id = data.get("card_id")
             self.handle_opponent_play_network(opp_type, opp_id)
@@ -380,7 +389,7 @@ class EcardGameUI:
         surface.blit(title_text, (150, 13))
         
         font_score = get_font(18, bold=True)
-        score_str = f"戰績 — 玩家 {self.game_manager.wins_player} : {self.game_manager.wins_cpu} 電腦"
+        score_str = f"戰績 — {self.player_name} {self.game_manager.wins_player} : {self.game_manager.wins_cpu} {self.opponent_name}"
         score_text = font_score.render(score_str, True, (240, 240, 245))
         score_rect = score_text.get_rect(center=(1000 // 2, 25))
         surface.blit(score_text, score_rect)
@@ -393,12 +402,12 @@ class EcardGameUI:
         cpu_spot = pygame.Rect(455, 210, 90, 140)
         pygame.draw.rect(surface, (35, 30, 45), cpu_spot, width=1, border_radius=8)
         font = get_font(14)
-        lbl = font.render("電腦出牌槽", True, (65, 55, 75))
+        lbl = font.render(f"{self.opponent_name}出牌槽", True, (65, 55, 75))
         surface.blit(lbl, lbl.get_rect(center=cpu_spot.center))
         
         p_spot = pygame.Rect(455, 360, 90, 140)
         pygame.draw.rect(surface, (25, 35, 45), p_spot, width=1, border_radius=8)
-        lbl2 = font.render("玩家出牌槽", True, (55, 65, 75))
+        lbl2 = font.render(f"{self.player_name}出牌槽", True, (55, 65, 75))
         surface.blit(lbl2, lbl2.get_rect(center=p_spot.center))
         
         tie_area = pygame.Rect(760, 120, 220, 380)

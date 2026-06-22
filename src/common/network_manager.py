@@ -23,6 +23,10 @@ class NetworkManager:
         self.sock = None
         self._recv_buffer = ""
         
+        # 玩家名字與對手名字
+        self.player_name = "Player"
+        self.opponent_name = "Opponent"
+        
         # 主機端局數狀態暫存變數
         self.host_role = None
         self.client_role = None
@@ -72,6 +76,10 @@ class NetworkManager:
                 self.sock.setblocking(False)  # 設為非阻塞模式以利主更新執行緒輪詢
                 self._recv_buffer = ""
                 self.is_connected = True
+                
+                # 發送握手訊息給 Host 以同步名字
+                self.send_data({"action": "handshake", "name": self.player_name})
+                
                 if self.on_connected:
                     self.on_connected()
                 return True, "連線成功"
@@ -183,7 +191,22 @@ class NetworkManager:
     def _process_client_msg(self, data_dict):
         """處理 Client 傳入的訊息"""
         action = data_dict.get("action")
-        if action == "select_role":
+        if action == "handshake":
+            self.opponent_name = data_dict.get("name", "Guest")
+            print(f"[Network Host] Received client name: {self.opponent_name}")
+            # 回傳主機的名字給客機，同時觸發對方的 sync_names 封包
+            self._send_to_client({
+                "action": "sync_names",
+                "player_name": self.opponent_name,
+                "opponent_name": self.player_name
+            })
+            # 派發給主機本地 UI 讓其更新名字
+            self._deliver_local({
+                "action": "sync_names",
+                "player_name": self.player_name,
+                "opponent_name": self.opponent_name
+            })
+        elif action == "select_role":
             self.client_role = data_dict.get("role")
             self.host_role = "Slave" if self.client_role == "Emperor" else "Emperor"
             # 傳給 Client
