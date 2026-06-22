@@ -192,7 +192,7 @@ class NetworkManager:
         """處理 Client 傳入的訊息"""
         action = data_dict.get("action")
         if action == "handshake":
-            self.opponent_name = data_dict.get("name", "Guest")
+            self.opponent_name = data_dict.get("name", "Guest") or "Guest"
             print(f"[Network Host] Received client name: {self.opponent_name}")
             # 回傳主機的名字給客機，同時觸發對方的 sync_names 封包
             self._send_to_client({

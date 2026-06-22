@@ -23,7 +23,10 @@ class EcardGameUI:
         
         # 玩家與對手名字
         self.player_name = self.net_manager.player_name if hasattr(self.net_manager, "player_name") else "玩家"
-        self.opponent_name = "電腦" if is_offline else "對手"
+        if is_offline:
+            self.opponent_name = "電腦"
+        else:
+            self.opponent_name = self.net_manager.opponent_name if (hasattr(self.net_manager, "opponent_name") and self.net_manager.opponent_name not in ("Opponent", "")) else "對手"
 
         # 遊戲內卡牌動畫管理列表
         self.uicards_player = []
