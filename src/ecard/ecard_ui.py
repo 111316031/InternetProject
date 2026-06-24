@@ -39,6 +39,10 @@ class EcardGameUI:
         self.active_timer = 0
         self.show_result_modal = False
         
+        # 懸停卡牌同步狀態變數
+        self.last_hovered_index = None
+        self.opponent_hovered_index = None
+        
         # 註冊網路管理器回呼函數以進行事件驅動
         self.net_manager.on_receive_message = self.on_net_receive
         
@@ -64,10 +68,21 @@ class EcardGameUI:
             self.opponent_name = data.get("opponent_name", self.opponent_name)
             print(f"[UI] Sync Names - Player: {self.player_name}, Opponent: {self.opponent_name}")
             
+        elif action == "sync_hand":
+            hand_types = data.get("hand")
+            if hand_types:
+                self.game_manager.sync_cpu_hand(hand_types)
+                self.uicards_cpu = [UICard(c) for c in self.game_manager.cpu_hand]
+                self.sync_hand_layouts(initial=True)
+                
+        elif action == "hover_card":
+            self.opponent_hovered_index = data.get("index")
+            
         elif action == "opponent_played":
             opp_type = data.get("card_type")
             opp_id = data.get("card_id")
-            self.handle_opponent_play_network(opp_type, opp_id)
+            opp_index = data.get("index")
+            self.handle_opponent_play_network(opp_type, opp_id, opp_index)
             
         elif action == "game_start":
             role = data.get("role")
@@ -94,7 +109,18 @@ class EcardGameUI:
         self.uicard_played_cpu = None
         self.show_result_modal = False
         
+        # 重置懸停同步狀態
+        self.last_hovered_index = None
+        self.opponent_hovered_index = None
+        
         self.sync_hand_layouts(initial=True)
+        
+        # 如果是連線模式，將本機隨機打亂後的手牌順序同步給對手
+        if not self.is_offline:
+            self.net_manager.send_data({
+                "action": "sync_hand",
+                "hand": [c.card_type for c in self.game_manager.player_hand]
+            })
 
     def sync_hand_layouts(self, initial=False):
         """計算賸餘手牌坐標並套用滑動動畫"""
@@ -153,6 +179,13 @@ class EcardGameUI:
                 self.uicard_played_cpu.target_y = 210.0
         else:
             # 連線模式
+            # 取得該卡牌在剩餘手牌中的索引，以同步給對手
+            play_index = None
+            try:
+                play_index = self.uicards_player.index(uicard)
+            except ValueError:
+                pass
+
             self.uicards_player.remove(uicard)
             uicard.is_played = True
             uicard.is_hovered = False
@@ -168,30 +201,37 @@ class EcardGameUI:
             self.net_manager.send_data({
                 "action": "play_card",
                 "card_id": uicard.card_id,
-                "card_type": uicard.card_type
+                "card_type": uicard.card_type,
+                "index": play_index
             })
             self.game_manager.game_phase = 2  # ANIMATING_PLAY
 
-    def handle_opponent_play_network(self, opp_type, opp_id):
+    def handle_opponent_play_network(self, opp_type, opp_id, opp_index=None):
         """連線模式下對手出牌動畫橋接"""
         c_data = ecard_logic.CardData(opp_type, True, opp_id)
         self.game_manager.cpu_played = c_data
         
         # 1. 同步移出邏輯層中的卡牌，避免殘留造成結算手牌公開異常
         cpu_data = None
-        for cd in self.game_manager.cpu_hand:
-            if cd.card_type == opp_type:
-                cpu_data = cd
-                break
+        if opp_index is not None and 0 <= opp_index < len(self.game_manager.cpu_hand):
+            cpu_data = self.game_manager.cpu_hand[opp_index]
+        else:
+            for cd in self.game_manager.cpu_hand:
+                if cd.card_type == opp_type:
+                    cpu_data = cd
+                    break
         if cpu_data:
             self.game_manager.cpu_hand.remove(cpu_data)
             
-        # 2. 尋找視覺層中匹配卡牌型態的 UI 物件
+        # 2. 尋找視覺層中匹配的 UI 物件
         cpu_card = None
-        for uc in self.uicards_cpu:
-            if uc.card_type == opp_type:
-                cpu_card = uc
-                break
+        if opp_index is not None and 0 <= opp_index < len(self.uicards_cpu):
+            cpu_card = self.uicards_cpu[opp_index]
+        else:
+            for uc in self.uicards_cpu:
+                if uc.card_type == opp_type:
+                    cpu_card = uc
+                    break
                 
         # 降級防護：若沒有找到同型態的卡片，則隨機取第一張
         if not cpu_card and len(self.uicards_cpu) > 0:
@@ -338,14 +378,32 @@ class EcardGameUI:
             
         # 狀態機更新
         if self.game_manager.game_phase == 1:  # PLAYING
-            for uc in self.uicards_player:
+            current_hovered_idx = None
+            for idx, uc in enumerate(self.uicards_player):
                 rect = pygame.Rect(uc.x, uc.y, uc.width, uc.height)
                 if rect.collidepoint(mouse_pos):
                     uc.is_hovered = True
                     uc.target_y = 495.0
+                    current_hovered_idx = idx
                 else:
                     uc.is_hovered = False
                     uc.target_y = 520.0
+            
+            # 如果懸停的卡牌索引改變，發送封包給對手
+            if current_hovered_idx != self.last_hovered_index:
+                self.last_hovered_index = current_hovered_idx
+                if not self.is_offline:
+                    self.net_manager.send_data({
+                        "action": "hover_card",
+                        "index": current_hovered_idx
+                    })
+                    
+            # 對方手牌根據懸停索引同步「下沉」效果 (浮動至 Y = 75)
+            for idx, uc in enumerate(self.uicards_cpu):
+                if idx == self.opponent_hovered_index:
+                    uc.target_y = 75.0
+                else:
+                    uc.target_y = 50.0
                     
         elif self.game_manager.game_phase == 2:  # ANIMATING_PLAY
             if self.uicard_played_player and self.uicard_played_cpu:

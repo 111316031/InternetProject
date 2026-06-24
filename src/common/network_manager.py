@@ -189,6 +189,8 @@ class NetworkManager:
         elif action == "play_card":
             self.host_card = data_dict
             self._check_and_evaluate()
+        elif action in ("sync_hand", "hover_card"):
+            self._send_to_client(data_dict)
 
     def _process_client_msg(self, data_dict):
         """處理 Client 傳入的訊息"""
@@ -218,25 +220,31 @@ class NetworkManager:
         elif action == "play_card":
             self.client_card = data_dict
             self._check_and_evaluate()
+        elif action in ("sync_hand", "hover_card"):
+            self._deliver_local(data_dict)
 
     def _check_and_evaluate(self):
         """檢查是否雙方出牌完畢，若完畢則進行判定並廣播"""
         if self.host_card and self.client_card:
             host_card_type = self.host_card.get("card_type")
             host_card_id = self.host_card.get("card_id")
+            host_card_index = self.host_card.get("index")
             client_card_type = self.client_card.get("card_type")
             client_card_id = self.client_card.get("card_id")
+            client_card_index = self.client_card.get("index")
 
             # 1. 廣播對手出牌狀態
             self._send_to_client({
                 "action": "opponent_played",
                 "card_type": host_card_type,
-                "card_id": host_card_id
+                "card_id": host_card_id,
+                "index": host_card_index
             })
             self._deliver_local({
                 "action": "opponent_played",
                 "card_type": client_card_type,
-                "card_id": client_card_id
+                "card_id": client_card_id,
+                "index": client_card_index
             })
 
             # 2. 進行克制判定

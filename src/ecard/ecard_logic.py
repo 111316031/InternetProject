@@ -117,6 +117,51 @@ class EcardGame:
         self.status_message = "請點擊一張手牌，將其打出！"
         self.round_winner = None
 
+    def init_round_synced(self, p_role, player_hand_types=None, cpu_hand_types=None):
+        """連線模式下，使用雙向同步的卡牌類型順序來初始化手牌"""
+        self.player_role = p_role
+        self.cpu_role = SLAVE if p_role == EMPEROR else EMPEROR
+        
+        self.player_played = None
+        self.cpu_played = None
+        self.tie_pile = []
+        self.player_hand = []
+        self.cpu_hand = []
+        
+        # 依據傳入的類型列表生成 player_hand
+        if player_hand_types:
+            for t in player_hand_types:
+                self.player_hand.append(CardData(t, False, self.get_next_id()))
+        else:
+            if self.player_role == EMPEROR:
+                self.player_hand.append(CardData(EMPEROR, False, self.get_next_id()))
+                for _ in range(4):
+                    self.player_hand.append(CardData(CITIZEN, False, self.get_next_id()))
+            else:
+                self.player_hand.append(CardData(SLAVE, False, self.get_next_id()))
+                for _ in range(4):
+                    self.player_hand.append(CardData(CITIZEN, False, self.get_next_id()))
+            random.shuffle(self.player_hand)
+            
+        # 依據傳入的類型列表生成 cpu_hand
+        if cpu_hand_types:
+            for t in cpu_hand_types:
+                self.cpu_hand.append(CardData(t, True, self.get_next_id()))
+        else:
+            if self.cpu_role == EMPEROR:
+                self.cpu_hand.append(CardData(EMPEROR, True, self.get_next_id()))
+                for _ in range(4):
+                    self.cpu_hand.append(CardData(CITIZEN, True, self.get_next_id()))
+            else:
+                self.cpu_hand.append(CardData(SLAVE, True, self.get_next_id()))
+                for _ in range(4):
+                    self.cpu_hand.append(CardData(CITIZEN, True, self.get_next_id()))
+            random.shuffle(self.cpu_hand)
+            
+        self.game_phase = PLAYING
+        self.status_message = "請點擊一張手牌，將其打出！"
+        self.round_winner = None
+
     def play_card(self, p_card_id):
         """處理玩家出牌，並觸發電腦對手的隨機出牌決策"""
         p_card = None
@@ -215,3 +260,9 @@ class EcardGame:
         self.wins_cpu = 0
         self.game_phase = CHOOSE_ROLE
         self.status_message = "分數已重置。請重新選擇陣營開始遊戲。"
+
+    def sync_cpu_hand(self, cpu_hand_types):
+        """在連線模式下，根據對手傳過來的順序重新設定對手的手牌"""
+        self.cpu_hand = []
+        for t in cpu_hand_types:
+            self.cpu_hand.append(CardData(t, True, self.get_next_id()))
