@@ -78,6 +78,10 @@ class EcardGameUI:
         elif action == "hover_card":
             self.opponent_hovered_index = data.get("index")
             
+        elif action == "opponent_has_played":
+            opp_index = data.get("index")
+            self.handle_opponent_has_played(opp_index)
+            
         elif action == "opponent_played":
             opp_type = data.get("card_type")
             opp_id = data.get("card_id")
@@ -198,6 +202,13 @@ class EcardGameUI:
             if uicard.card_data in self.game_manager.player_hand:
                 self.game_manager.player_hand.remove(uicard.card_data)
             
+            # 重置本機的懸停狀態並發送清除封包給對手，避免對手畫面發生多一張牌懸停的 Bug
+            self.last_hovered_index = None
+            self.net_manager.send_data({
+                "action": "hover_card",
+                "index": None
+            })
+            
             self.net_manager.send_data({
                 "action": "play_card",
                 "card_id": uicard.card_id,
@@ -206,10 +217,36 @@ class EcardGameUI:
             })
             self.game_manager.game_phase = 2  # ANIMATING_PLAY
 
+    def handle_opponent_has_played(self, opp_index):
+        """連線模式下對手已出牌（但尚未翻牌），將其卡牌以背面形式先移至出牌區"""
+        if self.uicard_played_cpu:
+            return  # 避免重複處理
+            
+        # 重置對手懸停狀態，防止其他手牌錯誤下沉
+        self.opponent_hovered_index = None
+        
+        cpu_card = None
+        if opp_index is not None and 0 <= opp_index < len(self.uicards_cpu):
+            cpu_card = self.uicards_cpu[opp_index]
+        else:
+            if len(self.uicards_cpu) > 0:
+                cpu_card = self.uicards_cpu[0]
+                
+        if cpu_card:
+            self.uicards_cpu.remove(cpu_card)
+            cpu_card.is_played = True
+            
+            self.uicard_played_cpu = cpu_card
+            self.uicard_played_cpu.target_x = 455.0
+            self.uicard_played_cpu.target_y = 210.0
+
     def handle_opponent_play_network(self, opp_type, opp_id, opp_index=None):
         """連線模式下對手出牌動畫橋接"""
         c_data = ecard_logic.CardData(opp_type, True, opp_id)
         self.game_manager.cpu_played = c_data
+        
+        # 重置對手懸停狀態
+        self.opponent_hovered_index = None
         
         # 1. 同步移出邏輯層中的卡牌，避免殘留造成結算手牌公開異常
         cpu_data = None
@@ -224,21 +261,26 @@ class EcardGameUI:
             self.game_manager.cpu_hand.remove(cpu_data)
             
         # 2. 尋找視覺層中匹配的 UI 物件
-        cpu_card = None
-        if opp_index is not None and 0 <= opp_index < len(self.uicards_cpu):
-            cpu_card = self.uicards_cpu[opp_index]
+        if self.uicard_played_cpu:
+            cpu_card = self.uicard_played_cpu
         else:
-            for uc in self.uicards_cpu:
-                if uc.card_type == opp_type:
-                    cpu_card = uc
-                    break
+            cpu_card = None
+            if opp_index is not None and 0 <= opp_index < len(self.uicards_cpu):
+                cpu_card = self.uicards_cpu[opp_index]
+            else:
+                for uc in self.uicards_cpu:
+                    if uc.card_type == opp_type:
+                        cpu_card = uc
+                        break
+                    
+            # 降級防護：若沒有找到同型態的卡片，則隨機取第一張
+            if not cpu_card and len(self.uicards_cpu) > 0:
+                cpu_card = self.uicards_cpu[0]
                 
-        # 降級防護：若沒有找到同型態的卡片，則隨機取第一張
-        if not cpu_card and len(self.uicards_cpu) > 0:
-            cpu_card = self.uicards_cpu[0]
+            if cpu_card:
+                self.uicards_cpu.remove(cpu_card)
             
         if cpu_card:
-            self.uicards_cpu.remove(cpu_card)
             cpu_card.card_data = c_data
             cpu_card.card_id = opp_id
             cpu_card.card_type = opp_type
@@ -364,6 +406,15 @@ class EcardGameUI:
                 self.active_timer = 0
                 self.handle_timer_expiration()
                 
+        # 對方手牌根據懸停索引同步「下沉」效果 (浮動至 Y = 75)
+        # 只要在對局出牌或等待對手階段，皆可即時反映對手的懸停動作
+        if self.game_manager.game_phase in (1, 2):
+            for idx, uc in enumerate(self.uicards_cpu):
+                if idx == self.opponent_hovered_index:
+                    uc.target_y = 75.0
+                else:
+                    uc.target_y = 50.0
+                    
         # 更新卡牌位置與動畫
         for uc in self.uicards_player:
             uc.update(dt)
@@ -397,13 +448,6 @@ class EcardGameUI:
                         "action": "hover_card",
                         "index": current_hovered_idx
                     })
-                    
-            # 對方手牌根據懸停索引同步「下沉」效果 (浮動至 Y = 75)
-            for idx, uc in enumerate(self.uicards_cpu):
-                if idx == self.opponent_hovered_index:
-                    uc.target_y = 75.0
-                else:
-                    uc.target_y = 50.0
                     
         elif self.game_manager.game_phase == 2:  # ANIMATING_PLAY
             if self.uicard_played_player and self.uicard_played_cpu:
@@ -519,7 +563,13 @@ class EcardGameUI:
         elif "平手" in self.game_manager.status_message:
             color = (100, 180, 240)
             
-        msg_surf = font_msg.render(self.game_manager.status_message, True, color)
+        # 替換文字為真實的使用者暱稱以符合連線模式
+        msg_text = self.game_manager.status_message
+        msg_text = msg_text.replace("玩家", self.player_name)
+        msg_text = msg_text.replace("對手", self.opponent_name)
+        msg_text = msg_text.replace("電腦", self.opponent_name)
+        
+        msg_surf = font_msg.render(msg_text, True, color)
         surface.blit(msg_surf, msg_surf.get_rect(center=(1000 // 2, 682)))
 
     def draw_role_selection(self, surface, mouse_pos):
@@ -618,10 +668,14 @@ class EcardGameUI:
         surface.blit(title_surf, title_surf.get_rect(center=(500, 250)))
         
         font_modal_desc = get_font(13)
-        desc_surf = font_modal_desc.render(self.game_manager.status_message, True, (180, 180, 190))
+        msg_text = self.game_manager.status_message
+        msg_text = msg_text.replace("玩家", self.player_name)
+        msg_text = msg_text.replace("對手", self.opponent_name)
+        msg_text = msg_text.replace("電腦", self.opponent_name)
+        desc_surf = font_modal_desc.render(msg_text, True, (180, 180, 190))
         surface.blit(desc_surf, desc_surf.get_rect(center=(500, 320)))
         
-        score_surf = get_font(16, bold=True).render(f"目前戰績: 玩家 {self.game_manager.wins_player} : {self.game_manager.wins_cpu} 電腦", True, (240, 240, 245))
+        score_surf = get_font(16, bold=True).render(f"目前戰績: {self.player_name} {self.game_manager.wins_player} : {self.game_manager.wins_cpu} {self.opponent_name}", True, (240, 240, 245))
         surface.blit(score_surf, score_surf.get_rect(center=(500, 370)))
         
         btn_rect = pygame.Rect(380, 430, 240, 50)

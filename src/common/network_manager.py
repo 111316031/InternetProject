@@ -188,6 +188,11 @@ class NetworkManager:
             self._deliver_local({"action": "game_start", "role": self.host_role})
         elif action == "play_card":
             self.host_card = data_dict
+            # 立即通知客機對手已出牌，便於執行置入出牌區的動畫
+            self._send_to_client({
+                "action": "opponent_has_played",
+                "index": data_dict.get("index")
+            })
             self._check_and_evaluate()
         elif action in ("sync_hand", "hover_card"):
             self._send_to_client(data_dict)
@@ -219,6 +224,11 @@ class NetworkManager:
             self._deliver_local({"action": "game_start", "role": self.host_role})
         elif action == "play_card":
             self.client_card = data_dict
+            # 立即通知主機本地 UI 對手已出牌，便於執行置入出牌區的動畫
+            self._deliver_local({
+                "action": "opponent_has_played",
+                "index": data_dict.get("index")
+            })
             self._check_and_evaluate()
         elif action in ("sync_hand", "hover_card"):
             self._deliver_local(data_dict)

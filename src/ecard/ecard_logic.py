@@ -225,16 +225,18 @@ class EcardGame:
                 winner = "CPU"
                 reason = "平民 鎮壓奴隸！電腦防守成功。"
                 
-        if winner == "Player":
-            if is_offline:
+        if is_offline:
+            if winner == "Player":
                 self.wins_player += 1
-            self.round_winner = "Player"
-            self.status_message = f"【勝利】{reason}"
-        else:
-            if is_offline:
+                self.round_winner = "Player"
+                self.status_message = f"【勝利】{reason}"
+            else:
                 self.wins_cpu += 1
-            self.round_winner = "CPU"
-            self.status_message = f"【失敗】{reason}"
+                self.round_winner = "CPU"
+                self.status_message = f"【失敗】{reason}"
+        else:
+            # 連線模式下，保留伺服器傳來的勝負判定與 status_message，只更新本地的勝出陣營以控制翻牌與彈窗
+            self.round_winner = "Player" if winner == "Player" else "CPU"
             
         self.game_phase = ROUND_OVER
         return winner, self.status_message
