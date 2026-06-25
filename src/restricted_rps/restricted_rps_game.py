@@ -481,6 +481,7 @@ class RestrictedRPSGame:
             log_msg = f"[對戰] {self.opponent_name} 擊敗玩家，贏取 1 顆星星！"
             
         self.add_log(log_msg)
+        self._sync_local_resources_to_net()
 
     def _execute_online_trade(self):
         self.player_cards["rock"] += self.trade_offer["want_rock"] - self.trade_offer["give_rock"]
@@ -1247,6 +1248,7 @@ class RestrictedRPSGame:
                 "stars": self.active_npc["stars"],
                 "cards": self.active_npc["cards"]
             })
+        self._sync_local_resources_to_net()
 
     def _trans_card(self, ctype):
         if ctype == "rock": return "石頭 (Rock)"
@@ -1453,7 +1455,7 @@ class RestrictedRPSGame:
                 self._simulate_npc_clash_log()
 
         # 6. 檢查終極結束條件 (所有人都結束或是只剩下一個人但手牌沒出完)
-        if self.state in (RPG_WALK, DIALOGUE, TRADE, BATTLE, SUMMARY):
+        if self.state in (RPG_WALK, SUMMARY):
             active_count = 0
             local_active = False
             if not self.is_spectator and self.player_stars > 0 and sum(self.player_cards.values()) > 0:
