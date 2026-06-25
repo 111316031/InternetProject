@@ -310,7 +310,26 @@ class NetworkManager:
                     if data_dict.get("action") == "ROOM_INFO_UPDATE":
                         self.room_id = data_dict.get("room_id")
                         self.room_host = data_dict.get("host")
-                        self.room_players = data_dict.get("players", [])
+                        
+                        players = data_dict.get("players", [])
+                        name_counts = {}
+                        for p in players:
+                            b_name = p.get("name", "Unknown")
+                            if b_name not in name_counts:
+                                name_counts[b_name] = []
+                            name_counts[b_name].append(p)
+                        
+                        for b_name, p_list in name_counts.items():
+                            if len(p_list) == 1:
+                                p_list[0]["display_name"] = b_name
+                            else:
+                                for idx, p in enumerate(p_list):
+                                    if idx == 0:
+                                        p["display_name"] = b_name
+                                    else:
+                                        p["display_name"] = f"{b_name} ({idx})"
+                                        
+                        self.room_players = players
                         self.room_bots_count = data_dict.get("bots_count", 0)
                         self.room_status = data_dict.get("status")
                     elif data_dict.get("action") == "SET_PLAYER_ID":
@@ -336,3 +355,12 @@ class NetworkManager:
             if self.on_error:
                 self.on_error(f"輪詢資料異常: {str(e)}")
             self.disconnect()
+
+    def get_player_display_name(self, player_id, default_name="Unknown"):
+        """依據玩家 Hash ID 取得在大廳中算好的顯示名稱，以防同名衝突"""
+        if not player_id:
+            return default_name
+        for p in self.room_players:
+            if p.get("id") == player_id:
+                return p.get("display_name", p.get("name", default_name))
+        return default_name

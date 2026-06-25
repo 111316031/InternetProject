@@ -271,7 +271,7 @@ def draw_room_lobby_scene(surface, mouse_pos):
             font_name = get_font(18, bold=True)
             name_color = (255, 215, 0) if is_room_host else (240, 240, 250)
             
-            disp_name = p_name
+            disp_name = player_info.get("display_name", p_name)
             if is_bot:
                 disp_name += " (虛擬 AI)"
                 

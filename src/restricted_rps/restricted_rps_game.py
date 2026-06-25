@@ -298,7 +298,7 @@ class RestrictedRPSGame:
                 
                 # 為了向下相容，將最新移動的玩家暫存為主要對手
                 self.opponent_id = opp_key
-                self.opponent_name = sender
+                self.opponent_name = self.net_manager.get_player_display_name(opp_key, sender)
                 self.opponent_x = self.other_players[opp_key]["x"]
                 self.opponent_y = self.other_players[opp_key]["y"]
                 self.opponent_stars = self.other_players[opp_key]["stars"]
@@ -317,7 +317,7 @@ class RestrictedRPSGame:
             req_type = data.get("type")
             self.pending_request = {"type": req_type, "sender": sender, "sender_id": data.get("sender_id")}
             self.opponent_id = data.get("sender_id")
-            self.opponent_name = sender
+            self.opponent_name = self.net_manager.get_player_display_name(self.opponent_id, sender)
             
         elif action == "interact_resp":
             req_type = data.get("type")
@@ -327,7 +327,7 @@ class RestrictedRPSGame:
                 self.sent_request = None
                 if accepted:
                     self.opponent_id = opp_sender_id
-                    self.opponent_name = sender
+                    self.opponent_name = self.net_manager.get_player_display_name(self.opponent_id, sender)
                     if self.opponent_id in self.other_players:
                         self.opponent_stars = self.other_players[self.opponent_id]["stars"]
                         self.opponent_cards = {
@@ -1657,7 +1657,8 @@ class RestrictedRPSGame:
                 pygame.draw.circle(surface, (10, 10, 15), (opp_scr_x, opp_scr_y), CHAR_RADIUS, width=1)
                 
                 # 名字與星星
-                lbl_opp = get_font(12, bold=True).render(opp_name, True, (100, 180, 255))
+                opp_disp_name = self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown"))
+                lbl_opp = get_font(12, bold=True).render(opp_disp_name, True, (100, 180, 255))
                 surface.blit(lbl_opp, lbl_opp.get_rect(center=(opp_scr_x, opp_scr_y - CHAR_RADIUS - 12)))
                 
                 lbl_opp_st = get_font(10).render(f"⭐ {opp_stars}", True, (245, 220, 90))
@@ -2252,7 +2253,7 @@ class RestrictedRPSGame:
                 opp_cards = opp_info.get("cards_count", 0)
                 is_opp_safe = (opp_stars >= 3 and opp_cards == 0)
                 results.append({
-                    "name": opp_name,
+                    "name": self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown")),
                     "status": "SAFE" if is_opp_safe else "LOSE",
                     "stars": opp_stars,
                     "cards": opp_cards
