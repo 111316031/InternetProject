@@ -28,6 +28,7 @@ class NetworkManager:
         
         # 玩家名字與對手名字
         self.player_name = "Player"
+        self.player_id = None
         self.opponent_name = "Opponent"
         
         # 房間大廳狀態變數
@@ -79,9 +80,10 @@ class NetworkManager:
             self.is_connected = True
             self.room_id = "1234"
             self.room_host = "HostName"
+            self.player_id = self.player_name
             self.room_players = [
-                {"name": "HostName", "is_bot": False, "status": "LOBBY"},
-                {"name": self.player_name, "is_bot": False, "status": "LOBBY"}
+                {"name": "HostName", "is_bot": False, "status": "LOBBY", "id": "HostName"},
+                {"name": self.player_name, "is_bot": False, "status": "LOBBY", "id": self.player_name}
             ]
             if self.on_connected:
                 self.on_connected()
@@ -141,7 +143,7 @@ class NetworkManager:
         
         # 1. 於背景執行緒啟動 server.py
         try:
-            import server
+            from src.common import server
             def run_server_daemon():
                 try:
                     server.main()
@@ -160,7 +162,8 @@ class NetworkManager:
             self.is_connected = True
             self.room_id = "1234"
             self.room_host = self.player_name
-            self.room_players = [{"name": self.player_name, "is_bot": False, "status": "LOBBY"}]
+            self.player_id = self.player_name
+            self.room_players = [{"name": self.player_name, "is_bot": False, "status": "LOBBY", "id": self.player_name}]
             if self.on_connected:
                 self.on_connected()
             return True, "模擬開房成功 (未加載 C 庫)"
@@ -199,6 +202,7 @@ class NetworkManager:
         self.is_host = False
         self.room_id = None
         self.room_host = None
+        self.player_id = None
         self.room_players = []
         if self.sock:
             try:
@@ -234,7 +238,7 @@ class NetworkManager:
         if action == "ADD_BOT":
             self.room_bots_count += 1
             bot_name = f"BOT_{self.room_bots_count}"
-            self.room_players.append({"name": bot_name, "is_bot": True, "status": "LOBBY"})
+            self.room_players.append({"name": bot_name, "is_bot": True, "status": "LOBBY", "id": bot_name})
             if self.on_receive_message:
                 self.on_receive_message({
                     "action": "ROOM_INFO_UPDATE",
@@ -309,6 +313,8 @@ class NetworkManager:
                         self.room_players = data_dict.get("players", [])
                         self.room_bots_count = data_dict.get("bots_count", 0)
                         self.room_status = data_dict.get("status")
+                    elif data_dict.get("action") == "SET_PLAYER_ID":
+                        self.player_id = data_dict.get("player_id")
                     
                     if self.on_receive_message:
                         self.on_receive_message(data_dict)

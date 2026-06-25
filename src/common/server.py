@@ -1,4 +1,4 @@
-# filepath: C:\Users\ethan\Desktop\Project-Combine\server.py
+# filepath: src\common\server.py
 """
 E-Game Center 中央遊戲伺服器 (Central Game Server)
 =================================================
@@ -14,12 +14,23 @@ import socket
 import json
 import threading
 import random
+import hashlib
 
 HOST = "0.0.0.0"
 PORT = 8888
 
 GAME_ROOMS = {}
 rooms_lock = threading.Lock()
+
+def get_player_hash(name, client_sock):
+    try:
+        if client_sock:
+            ip = client_sock.getpeername()[0]
+        else:
+            ip = "127.0.0.1"
+    except Exception:
+        ip = "127.0.0.1"
+    return hashlib.sha256(f"{name}_{ip}".encode('utf-8')).hexdigest()
 
 def get_unique_room_id():
     return str(random.randint(1000, 9999))
@@ -65,7 +76,8 @@ def send_room_info_update(room):
         players_info.append({
             "name": p["name"],
             "is_bot": p["is_bot"],
-            "status": room["status"]
+            "status": room["status"],
+            "id": p.get("id", "")
         })
     
     update_data = {
@@ -134,12 +146,20 @@ def process_message(client_sock, msg):
         game_type = msg.get("game_type", "ecard")
         with rooms_lock:
             r_id = get_unique_room_id()
+            host_hash = get_player_hash(name, client_sock)
+            
+            # 先回傳 player_id 給創房者
+            send_to_player({"is_bot": False, "socket": client_sock, "name": name}, {
+                "action": "SET_PLAYER_ID",
+                "player_id": host_hash
+            })
+            
             new_room = {
                 "room_id": r_id,
                 "game_type": game_type,
                 "status": "LOBBY",
-                "host": name,
-                "players": [{"name": name, "is_bot": False, "socket": client_sock, "role": None}],
+                "host": host_hash,
+                "players": [{"name": name, "is_bot": False, "socket": client_sock, "role": None, "id": host_hash}],
                 "bots_count": 0,
                 "game_state": {
                     "host_card": None,
@@ -152,7 +172,7 @@ def process_message(client_sock, msg):
                 }
             }
             GAME_ROOMS[r_id] = new_room
-            print(f"[Server] Room {r_id} ({game_type}) created by Host '{name}'")
+            print(f"[Server] Room {r_id} ({game_type}) created by Host '{name}' (Hash: {host_hash[:8]})")
             send_room_info_update(new_room)
             return
 
@@ -160,12 +180,20 @@ def process_message(client_sock, msg):
         game_type = msg.get("game_type", "ecard")
         with rooms_lock:
             joined = False
+            player_hash = get_player_hash(name, client_sock)
+            
+            # 先回傳 player_id 給加入者
+            send_to_player({"is_bot": False, "socket": client_sock, "name": name}, {
+                "action": "SET_PLAYER_ID",
+                "player_id": player_hash
+            })
+            
             for r_id, room in GAME_ROOMS.items():
                 if room["game_type"] == game_type and room["status"] == "LOBBY":
                     if game_type == "ecard":
                         # E-Card 限制 2 人，若已滿且其中有機器人，則將機器人擠掉
                         if len(room["players"]) < 2:
-                            room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None})
+                            room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None, "id": player_hash})
                             print(f"[Server] Player '{name}' joined Room {r_id}")
                             send_room_info_update(room)
                             
@@ -192,7 +220,7 @@ def process_message(client_sock, msg):
                                     break
                             if bot_p:
                                 room["players"].remove(bot_p)
-                                room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None})
+                                room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None, "id": player_hash})
                                 print(f"[Server] Player '{name}' joined Room {r_id}, replacing bot '{bot_p['name']}'")
                                 send_room_info_update(room)
                                 
@@ -212,7 +240,7 @@ def process_message(client_sock, msg):
                                 break
                     else:
                         # RPS 無人數上限，直接加入
-                        room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None})
+                        room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None, "id": player_hash})
                         print(f"[Server] Player '{name}' joined Room {r_id}")
                         send_room_info_update(room)
                         joined = True
@@ -225,8 +253,8 @@ def process_message(client_sock, msg):
                     "room_id": r_id,
                     "game_type": game_type,
                     "status": "LOBBY",
-                    "host": name,
-                    "players": [{"name": name, "is_bot": False, "socket": client_sock, "role": None}],
+                    "host": player_hash,
+                    "players": [{"name": name, "is_bot": False, "socket": client_sock, "role": None, "id": player_hash}],
                     "bots_count": 0,
                     "game_state": {
                         "host_card": None,
@@ -239,7 +267,7 @@ def process_message(client_sock, msg):
                     }
                 }
                 GAME_ROOMS[r_id] = new_room
-                print(f"[Server] No matching lobby room. Created Room {r_id} for '{name}'")
+                print(f"[Server] No matching lobby room. Created Room {r_id} for '{name}' (Hash: {player_hash[:8]})")
                 send_room_info_update(new_room)
             return
 
@@ -255,11 +283,11 @@ def process_message(client_sock, msg):
             if current_room:
                 break
 
-    if not current_room:
+    if not current_room or not my_player:
         return
 
     if action == "ADD_BOT":
-        if current_room["host"] != my_player["name"]:
+        if current_room["host"] != my_player.get("id"):
             send_to_player(my_player, {"action": "error", "message": "非房主無法新增機器人"})
             return
         limit = 4 if current_room["game_type"] == "rps" else 2
@@ -268,13 +296,13 @@ def process_message(client_sock, msg):
             return
         current_room["bots_count"] += 1
         bot_name = f"BOT_{current_room['bots_count']}"
-        current_room["players"].append({"name": bot_name, "is_bot": True, "socket": None, "role": None})
+        current_room["players"].append({"name": bot_name, "is_bot": True, "socket": None, "role": None, "id": bot_name})
         print(f"[Server] Added {bot_name} to Room {current_room['room_id']}")
         send_room_info_update(current_room)
         return
 
     elif action == "REMOVE_BOT":
-        if current_room["host"] != my_player["name"]:
+        if current_room["host"] != my_player.get("id"):
             send_to_player(my_player, {"action": "error", "message": "非房主無法移除機器人"})
             return
         bot_to_remove = None
@@ -292,7 +320,7 @@ def process_message(client_sock, msg):
         return
 
     elif action == "START_GAME_REQ":
-        if current_room["host"] != my_player["name"]:
+        if current_room["host"] != my_player.get("id"):
             send_to_player(my_player, {"action": "error", "message": "非房主無法啟動遊戲"})
             return
         
@@ -329,8 +357,8 @@ def process_message(client_sock, msg):
         
         if opp["is_bot"]:
             opp["role"] = "Slave" if role == "Emperor" else "Emperor"
-            g_state["host_role"] = role if my_player["name"] == current_room["host"] else opp["role"]
-            g_state["client_role"] = opp["role"] if my_player["name"] == current_room["host"] else role
+            g_state["host_role"] = role if my_player.get("id") == current_room["host"] else opp["role"]
+            g_state["client_role"] = opp["role"] if my_player.get("id") == current_room["host"] else role
             if opp["role"] == "Emperor":
                 g_state["bot_hand"] = ["Emperor", "Citizen", "Citizen", "Citizen", "Citizen"]
             else:
@@ -339,8 +367,8 @@ def process_message(client_sock, msg):
         else:
             if not opp["role"]:
                 opp["role"] = "Slave" if role == "Emperor" else "Emperor"
-                g_state["host_role"] = role if my_player["name"] == current_room["host"] else opp["role"]
-                g_state["client_role"] = opp["role"] if my_player["name"] == current_room["host"] else role
+                g_state["host_role"] = role if my_player.get("id") == current_room["host"] else opp["role"]
+                g_state["client_role"] = opp["role"] if my_player.get("id") == current_room["host"] else role
                 send_to_player(my_player, {"action": "game_start", "role": role})
                 send_to_player(opp, {"action": "game_start", "role": opp["role"]})
             else:
@@ -354,7 +382,7 @@ def process_message(client_sock, msg):
     elif action == "play_card" and current_room["game_type"] == "ecard":
         g_state = current_room["game_state"]
         opp = [p for p in current_room["players"] if p["name"] != my_player["name"]][0]
-        is_host = (my_player["name"] == current_room["host"])
+        is_host = (my_player.get("id") == current_room["host"])
         if is_host:
             g_state["host_card"] = msg
         else:

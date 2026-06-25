@@ -545,7 +545,7 @@ class RestrictedRPSGame:
             
         # 聯機模式下若自己是 Host，則廣播日誌給其他玩家
         if not self.is_offline and self.net_manager:
-            if self.net_manager.player_name == self.net_manager.room_host:
+            if getattr(self.net_manager, "player_id", None) == self.net_manager.room_host:
                 if not getattr(self, "_is_handling_broadcast_log", False):
                     self.net_manager.send_data({
                         "action": "broadcast_log",
@@ -1275,7 +1275,7 @@ class RestrictedRPSGame:
         self.camera_y = max(0, min(self.camera_y, self.world_height - 700))
         
         # 聯機模式下的 Host 負責定期廣播所有機器人的最新座標與資產
-        if not self.is_offline and self.net_manager and self.net_manager.player_name == self.net_manager.room_host:
+        if not self.is_offline and self.net_manager and getattr(self.net_manager, "player_id", None) == self.net_manager.room_host:
             if not hasattr(self, "bot_sync_timer"):
                 self.bot_sync_timer = 0.0
             self.bot_sync_timer += dt / 1000.0
@@ -1298,7 +1298,7 @@ class RestrictedRPSGame:
                 })
         
         # 4. NPC 行為更新與漫遊模擬 (僅在離線或聯機的 Host 端進行更新)
-        is_host = (self.is_offline or (self.net_manager and self.net_manager.player_name == self.net_manager.room_host))
+        is_host = (self.is_offline or (self.net_manager and getattr(self.net_manager, "player_id", None) == self.net_manager.room_host))
         for npc in self.npcs:
             if npc["status"] in ("SAFE", "LOSE"):
                 # 如果已經安全通關或出局，就不再漫遊，移至特定安全點

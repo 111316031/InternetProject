@@ -266,7 +266,7 @@ def draw_room_lobby_scene(surface, mouse_pos):
             player_info = net_manager.room_players[idx]
             p_name = player_info["name"]
             is_bot = player_info.get("is_bot", False)
-            is_room_host = (p_name == net_manager.room_host)
+            is_room_host = (player_info.get("id") == net_manager.room_host)
             
             font_name = get_font(18, bold=True)
             name_color = (255, 215, 0) if is_room_host else (240, 240, 250)
@@ -289,7 +289,7 @@ def draw_room_lobby_scene(surface, mouse_pos):
             empty_surf = font_empty.render("等待玩家加入...", True, (80, 80, 90))
             surface.blit(empty_surf, (slot_rect.x + 20, slot_rect.y + 25))
             
-    is_me_host = (net_manager.player_name == net_manager.room_host)
+    is_me_host = (getattr(net_manager, "player_id", None) == net_manager.room_host)
     total_players = len(net_manager.room_players)
     
     # 2.1 新增機器人按鈕 (限房主且人數未滿上限)
@@ -517,7 +517,7 @@ def main():
                 # 房間大廳 (ROOM_LOBBY) 狀態下的點擊偵測
                 # ------------------------------------------
                 elif game.game_phase == ROOM_LOBBY:
-                    is_me_host = (net_manager.player_name == net_manager.room_host)
+                    is_me_host = (getattr(net_manager, "player_id", None) == net_manager.room_host)
                     total_players = len(net_manager.room_players)
                     
                     # 房主新增機器人
