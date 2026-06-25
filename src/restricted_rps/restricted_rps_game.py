@@ -2315,9 +2315,10 @@ class RestrictedRPSGame:
         
         if not self.is_offline:
             for opp_name, opp_info in self.other_players.items():
-                opp_stars = opp_info.get("stars", 0)
-                opp_cards = opp_info.get("cards_count", 0)
-                is_opp_safe = (opp_stars >= 3 and opp_cards == 0)
+                opp_is_spec = opp_info.get("is_spectator", False)
+                opp_stars = opp_info.get("stars", 0) if not opp_is_spec else 0
+                opp_cards = opp_info.get("cards_count", 0) if not opp_is_spec else 0
+                is_opp_safe = (opp_stars >= 3 and opp_cards == 0 and not opp_is_spec)
                 results.append({
                     "name": self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown")),
                     "status": "SAFE" if is_opp_safe else "LOSE",
