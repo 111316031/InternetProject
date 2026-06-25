@@ -15,6 +15,7 @@ import pygame
 import sys
 import random
 import math
+from typing import Any
 from src.common.ui_components import get_font, draw_rect_alpha, draw_glow, draw_button, draw_gradient_background
 
 # ==========================================
@@ -50,7 +51,7 @@ class RestrictedRPSGame:
     def __init__(self, surface, game_manager, net_manager=None, is_offline=True):
         self.surface = surface
         self.game_manager = game_manager  # 外部主狀態機 EcardGame 的引用
-        self.net_manager = net_manager
+        self.net_manager: Any = net_manager
         self.is_offline = is_offline
         
         # 遊戲初始化設定
@@ -110,13 +111,13 @@ class RestrictedRPSGame:
         self.log_timer = 0.0
         
         # 當前互動對象
-        self.active_npc = None
+        self.active_npc: Any = None
         self.dialogue_index = 0
         
         # 對戰狀態變數
         self.battle_phase = "select"  # "select", "reveal", "result"
-        self.player_selected_card = None
-        self.npc_selected_card = None
+        self.player_selected_card: Any = None
+        self.npc_selected_card: Any = None
         self.battle_result_msg = ""
         self.battle_result_color = (255, 255, 255)
         self.battle_anim_timer = 0
@@ -142,10 +143,10 @@ class RestrictedRPSGame:
         self.opponent_cards = {"rock": 4, "paper": 4, "scissors": 4}
         self.opponent_x = 800.0
         self.opponent_y = 1000.0
-        self.opponent_selected_card = None
+        self.opponent_selected_card: Any = None
         
-        self.pending_request = None # {"type": "battle" | "trade", "sender": name}
-        self.sent_request = None # "battle" | "trade"
+        self.pending_request: Any = None # {"type": "battle" | "trade", "sender": name}
+        self.sent_request: Any = None # "battle" | "trade"
         
         self.trade_self_ready = False
         self.trade_opp_ready = False
