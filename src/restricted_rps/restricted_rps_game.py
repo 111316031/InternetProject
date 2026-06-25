@@ -1165,6 +1165,7 @@ class RestrictedRPSGame:
                     "stars": self.active_npc["stars"],
                     "cards": self.active_npc["cards"]
                 })
+            self._sync_local_resources_to_net()
             self._check_game_over_conditions()
         else:
             # 拒絕交易
@@ -1254,19 +1255,10 @@ class RestrictedRPSGame:
         
         # 1. 失去所有星星 -> 失敗 (前往地下暗室)
         if self.player_stars <= 0:
+            self.player_stars = 0
             self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
             self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
-            if not self.is_offline and self.net_manager:
-                self.net_manager.send_data({
-                    "action": "sync_pos",
-                    "sender": self.player_name,
-                    "sender_id": getattr(self.net_manager, "player_id", None),
-                    "x": self.player_x,
-                    "y": self.player_y,
-                    "stars": 0,
-                    "cards_count": 0,
-                    "is_spectator": self.is_spectator
-                })
+            self._sync_local_resources_to_net()
             self.state = SUMMARY
             return
             
@@ -1275,17 +1267,9 @@ class RestrictedRPSGame:
             if self.player_stars < 3:
                 self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
                 self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
-                if not self.is_offline and self.net_manager:
-                    self.net_manager.send_data({
-                        "action": "sync_pos",
-                        "sender": self.player_name,
-                        "sender_id": getattr(self.net_manager, "player_id", None),
-                        "x": self.player_x,
-                        "y": self.player_y,
-                        "stars": self.player_stars,
-                        "cards_count": 0,
-                        "is_spectator": self.is_spectator
-                    })
+            else:
+                self.add_log(f"[通關] {self.player_name}卡牌已用罄且持有 {self.player_stars} 顆星，順利清債通關！")
+            self._sync_local_resources_to_net()
             self.state = SUMMARY
 
     # ==========================================
@@ -1294,6 +1278,10 @@ class RestrictedRPSGame:
     def update(self, dt, mouse_pos):
         if self.state in (RPG_WALK, DIALOGUE, TRADE, BATTLE):
             self._update_rpg_exploration(dt, mouse_pos)
+            self._update_npc_and_game_status(dt)
+        elif self.state == SUMMARY:
+            self.keys_pressed.clear()
+            self._update_npc_and_game_status(dt)
         else:
             self.keys_pressed.clear()
 
@@ -1379,7 +1367,8 @@ class RestrictedRPSGame:
         self.camera_y = int(self.player_y - 700 // 2)
         self.camera_x = max(0, min(self.camera_x, self.world_width - 1000))
         self.camera_y = max(0, min(self.camera_y, self.world_height - 700))
-        
+
+    def _update_npc_and_game_status(self, dt):
         # 聯機模式下的 Host 負責定期廣播所有機器人的最新座標與資產
         if not self.is_offline and self.net_manager and getattr(self.net_manager, "player_id", None) == self.net_manager.room_host:
             if not hasattr(self, "bot_sync_timer"):
@@ -1460,7 +1449,7 @@ class RestrictedRPSGame:
                 self._simulate_npc_clash_log()
 
         # 6. 檢查終極結束條件 (所有人都結束或是只剩下一個人但手牌沒出完)
-        if self.state in (RPG_WALK, DIALOGUE, TRADE, BATTLE):
+        if self.state in (RPG_WALK, DIALOGUE, TRADE, BATTLE, SUMMARY):
             active_count = 0
             local_active = False
             if not self.is_spectator and self.player_stars > 0 and sum(self.player_cards.values()) > 0:
