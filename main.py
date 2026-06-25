@@ -70,7 +70,7 @@ def on_net_connected():
 
 def on_net_disconnected(reason):
     """與伺服器斷線時的回呼"""
-    global connection_status_msg, connection_status_color, game, ecard_game_instance
+    global connection_status_msg, connection_status_color, game, ecard_game_instance, rps_game_instance
     connection_status_msg = f"連線已中斷: {reason}"
     connection_status_color = (255, 100, 100)
     
@@ -81,6 +81,9 @@ def on_net_disconnected(reason):
         if ecard_game_instance is not None:
             ecard_game_instance.cleanup()
             ecard_game_instance = None
+        if rps_game_instance is not None:
+            rps_game_instance.cleanup()
+            rps_game_instance = None
 
 def on_net_error(err_msg):
     """網路通訊遭遇異常時的回呼"""
@@ -262,7 +265,11 @@ def main():
         # 主機開房連線完成後，自動跳轉進入遊戲介面
         if connection_mode == "HOST" and is_waiting_connection and net_manager.is_connected:
             is_waiting_connection = False
-            ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
+            if getattr(net_manager, "game_type", "ecard") == "rps":
+                game.game_phase = RPS_GAME
+                rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game, net_manager, is_offline=False)
+            else:
+                ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
             connection_status_msg = "對手已連入！遊戲啟動中。"
             connection_status_color = (100, 255, 100)
             
@@ -329,6 +336,7 @@ def main():
                             # 網路連線模式下 - Host 開房監聽
                             connection_status_msg = "開房監聽中，等待對手連入..."
                             connection_status_color = (200, 200, 100)
+                            net_manager.game_type = "ecard"
                             success, msg = net_manager.host(server_port)
                             if success:
                                 is_waiting_connection = True
@@ -339,6 +347,7 @@ def main():
                             # 網路連線模式下 - Client 連線
                             connection_status_msg = "嘗試與主機連線中..."
                             connection_status_color = (200, 200, 100)
+                            net_manager.game_type = "ecard"
                             success, msg = net_manager.connect(server_ip, server_port)
                             if success:
                                 ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
@@ -348,8 +357,31 @@ def main():
                                 
                     # 點擊啟動「限定剪刀石頭布」遊戲
                     elif game_locked_rect.collidepoint(mouse_pos):
-                        game.game_phase = RPS_GAME
-                        rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game)
+                        net_manager.player_name = player_name
+                        if connection_mode == "OFFLINE":
+                            game.game_phase = RPS_GAME
+                            rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game, net_manager, is_offline=True)
+                        elif connection_mode == "HOST":
+                            connection_status_msg = "開房監聽中，等待對手連入..."
+                            connection_status_color = (200, 200, 100)
+                            net_manager.game_type = "rps"
+                            success, msg = net_manager.host(server_port)
+                            if success:
+                                is_waiting_connection = True
+                            else:
+                                connection_status_msg = f"開房失敗: {msg}"
+                                connection_status_color = (255, 100, 100)
+                        elif connection_mode == "CLIENT":
+                            connection_status_msg = "嘗試與主機連線中..."
+                            connection_status_color = (200, 200, 100)
+                            net_manager.game_type = "rps"
+                            success, msg = net_manager.connect(server_ip, server_port)
+                            if success:
+                                game.game_phase = RPS_GAME
+                                rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game, net_manager, is_offline=False)
+                            else:
+                                connection_status_msg = f"連線失敗: {msg}"
+                                connection_status_color = (255, 100, 100)
                                 
                     # 點擊離開程式
                     elif exit_btn_rect.collidepoint(mouse_pos):
@@ -392,6 +424,8 @@ def main():
             ecard_game_instance.draw(screen, mouse_pos)
         else:
             # 大廳狀態下釋放子遊戲實例，釋放記憶體並重置狀態
+            if rps_game_instance is not None:
+                rps_game_instance.cleanup()
             ecard_game_instance = None
             rps_game_instance = None
             

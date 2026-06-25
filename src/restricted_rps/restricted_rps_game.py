@@ -47,12 +47,13 @@ class RPGObstacle:
             surface.blit(lbl, lbl.get_rect(center=draw_rect.center))
 
 class RestrictedRPSGame:
-    def __init__(self, surface, game_manager):
+    def __init__(self, surface, game_manager, net_manager=None, is_offline=True):
         self.surface = surface
         self.game_manager = game_manager  # 外部主狀態機 EcardGame 的引用
+        self.net_manager = net_manager
+        self.is_offline = is_offline
         
         # 遊戲初始化設定
-        self.state = SETUP
         self.player_count = 8  # 預設自選人數為 8 人
         
         # 鍵盤按鍵狀態追蹤
@@ -61,7 +62,13 @@ class RestrictedRPSGame:
         # 玩家手牌與星星
         self.player_stars = 3
         self.player_cards = {"rock": 4, "paper": 4, "scissors": 4}
-        self.player_name = "主角 (Player)"
+        
+        # 玩家與對手名字
+        self.player_name = self.net_manager.player_name if (self.net_manager and hasattr(self.net_manager, "player_name")) else "主角 (Player)"
+        if self.is_offline:
+            self.opponent_name = "對手"
+        else:
+            self.opponent_name = self.net_manager.opponent_name if (self.net_manager and hasattr(self.net_manager, "opponent_name") and self.net_manager.opponent_name not in ("Opponent", "")) else "對手"
         
         # RPG 地圖大小
         self.world_width = 1600
@@ -129,6 +136,178 @@ class RestrictedRPSGame:
         # 卡牌縮放比例
         self.card_w = 120
         self.card_h = 180
+        
+        # 對手資產 (聯機模式用)
+        self.opponent_stars = 3
+        self.opponent_cards = {"rock": 4, "paper": 4, "scissors": 4}
+        self.opponent_x = 800.0
+        self.opponent_y = 1000.0
+        self.opponent_selected_card = None
+        
+        self.pending_request = None # {"type": "battle" | "trade", "sender": name}
+        self.sent_request = None # "battle" | "trade"
+        
+        self.trade_self_ready = False
+        self.trade_opp_ready = False
+        
+        if self.net_manager and not self.is_offline:
+            self.net_manager.on_receive_message = self.on_net_receive
+            # 同步名字
+            self.net_manager.send_data({"action": "handshake", "name": self.player_name})
+            
+        # 若是聯機模式，直接跳過設定畫面進入 RPGwalk
+        if not self.is_offline:
+            self.state = RPG_WALK
+        else:
+            self.state = SETUP
+
+    def cleanup(self):
+        if self.net_manager:
+            self.net_manager.on_receive_message = None
+
+    def _get_interactable_opponent(self):
+        if self.is_offline:
+            return False
+        dist = math.hypot(self.player_x - self.opponent_x, self.player_y - self.opponent_y)
+        if dist < 65:
+            return True
+        return False
+
+    def _send_interact_request(self, req_type):
+        if self.sent_request:
+            return
+        self.sent_request = req_type
+        self.net_manager.send_data({
+            "action": "interact_req",
+            "type": req_type
+        })
+        self.add_log(f"已向 {self.opponent_name} 發送 {req_type} 邀請...")
+
+    def on_net_receive(self, data):
+        action = data.get("action")
+        
+        if action == "sync_names":
+            self.opponent_name = data.get("player_name", self.opponent_name)
+            
+        elif action == "sync_pos":
+            self.opponent_x = data.get("x", self.opponent_x)
+            self.opponent_y = data.get("y", self.opponent_y)
+            
+        elif action == "interact_req":
+            req_type = data.get("type")
+            self.pending_request = {"type": req_type, "sender": self.opponent_name}
+            
+        elif action == "interact_resp":
+            req_type = data.get("type")
+            accepted = data.get("accepted", False)
+            if self.sent_request == req_type:
+                self.sent_request = None
+                if accepted:
+                    self.add_log(f"{self.opponent_name} 接受了您的邀請！")
+                    if req_type == "battle":
+                        self._start_battle_mode()
+                    elif req_type == "trade":
+                        self._start_trade_mode()
+                else:
+                    self.add_log(f"{self.opponent_name} 拒絕了您的邀請。")
+                    
+        elif action == "play_card":
+            self.opponent_selected_card = data.get("card_type")
+            if self.battle_phase == "waiting" and self.opponent_selected_card:
+                self._resolve_online_battle()
+                
+        elif action == "sync_trade":
+            opp_offer = data.get("offer")
+            if opp_offer:
+                self.trade_offer["want_rock"] = opp_offer["give_rock"]
+                self.trade_offer["want_paper"] = opp_offer["give_paper"]
+                self.trade_offer["want_scissors"] = opp_offer["give_scissors"]
+                self.trade_offer["want_star"] = opp_offer["give_star"]
+                
+                self.trade_offer["give_rock"] = opp_offer["want_rock"]
+                self.trade_offer["give_paper"] = opp_offer["want_paper"]
+                self.trade_offer["give_scissors"] = opp_offer["want_scissors"]
+                self.trade_offer["give_star"] = opp_offer["want_star"]
+                
+                self.trade_self_ready = False
+                self.trade_opp_ready = False
+                self.trade_message = "對手調整了提案，請重新確認。"
+                self.trade_msg_color = (180, 180, 190)
+                
+        elif action == "confirm_trade":
+            self.trade_opp_ready = True
+            self.trade_message = f"{self.opponent_name} 已同意此提案，請您確認以完成交易。"
+            self.trade_msg_color = (100, 200, 100)
+            if self.trade_self_ready and self.trade_opp_ready:
+                self._execute_online_trade()
+                
+        elif action == "cancel_trade":
+            self.add_log(f"[交易] {self.opponent_name} 取消了交易。")
+            self.state = RPG_WALK
+
+    def _resolve_online_battle(self):
+        self.battle_phase = "result"
+        self.player_cards[self.player_selected_card] -= 1
+        self.opponent_cards[self.opponent_selected_card] -= 1
+        
+        p = self.player_selected_card
+        o = self.opponent_selected_card
+        
+        if p == o:
+            self.battle_result_msg = "雙方平手！卡牌消耗但星數不變。"
+            self.battle_result_color = (130, 160, 240)
+            log_msg = f"[對戰] 玩家與 {self.opponent_name} 出現平局 ({self._trans_card(p)})！"
+        elif (p == "rock" and o == "scissors") or (p == "paper" and o == "rock") or (p == "scissors" and o == "paper"):
+            self.battle_result_msg = f"您獲勝了！奪得 1 顆星星！"
+            self.battle_result_color = (255, 215, 0)
+            self.player_stars += 1
+            self.opponent_stars -= 1
+            log_msg = f"[對戰] 玩家擊敗 {self.opponent_name}，贏取 1 顆星星！"
+        else:
+            self.battle_result_msg = f"您輸了... 失去 1 顆星星。"
+            self.battle_result_color = (240, 50, 50)
+            self.player_stars -= 1
+            self.opponent_stars += 1
+            log_msg = f"[對戰] {self.opponent_name} 擊敗玩家，贏取 1 顆星星！"
+            
+        self.add_log(log_msg)
+
+    def _execute_online_trade(self):
+        self.player_cards["rock"] += self.trade_offer["want_rock"] - self.trade_offer["give_rock"]
+        self.player_cards["paper"] += self.trade_offer["want_paper"] - self.trade_offer["give_paper"]
+        self.player_cards["scissors"] += self.trade_offer["want_scissors"] - self.trade_offer["give_scissors"]
+        self.player_stars += self.trade_offer["want_star"] - self.trade_offer["give_star"]
+        
+        self.opponent_cards["rock"] += self.trade_offer["give_rock"] - self.trade_offer["want_rock"]
+        self.opponent_cards["paper"] += self.trade_offer["give_paper"] - self.trade_offer["want_paper"]
+        self.opponent_cards["scissors"] += self.trade_offer["give_scissors"] - self.trade_offer["want_scissors"]
+        self.opponent_stars += self.trade_offer["give_star"] - self.trade_offer["want_star"]
+        
+        self.add_log(f"[交易] 玩家與 {self.opponent_name} 完成交易！")
+        self.state = RPG_WALK
+
+    def _draw_request_popup(self, surface, mouse_pos):
+        draw_rect_alpha(surface, (10, 10, 15, 180), pygame.Rect(0, 0, 1000, 700))
+        box = pygame.Rect(300, 250, 400, 200)
+        pygame.draw.rect(surface, (25, 25, 35), box, border_radius=10)
+        pygame.draw.rect(surface, (100, 180, 255), box, width=2, border_radius=10)
+        
+        req_type = self.pending_request["type"]
+        req_type_zh = "對決 (Battle)" if req_type == "battle" else ("交易 (Trade)" if req_type == "trade" else "對話 (Dialogue)")
+        txt1 = get_font(16, bold=True).render(f"來自 {self.opponent_name} 的邀請", True, (255, 215, 0))
+        txt2 = get_font(14).render(f"對方邀請您進行 {req_type_zh}", True, (220, 220, 230))
+        surface.blit(txt1, txt1.get_rect(center=(500, 290)))
+        surface.blit(txt2, txt2.get_rect(center=(500, 330)))
+        
+        btn_accept = pygame.Rect(340, 380, 140, 40)
+        ah = btn_accept.collidepoint(mouse_pos)
+        draw_button(surface, btn_accept, "接受 (Accept)", (50, 150, 50), (70, 180, 70), (255, 255, 255), ah, get_font(13, bold=True))
+        self.btn_rects["btn_req_accept"] = btn_accept
+        
+        btn_reject = pygame.Rect(520, 380, 140, 40)
+        rh = btn_reject.collidepoint(mouse_pos)
+        draw_button(surface, btn_reject, "拒絕 (Reject)", (150, 50, 50), (180, 70, 70), (255, 255, 255), rh, get_font(13, bold=True))
+        self.btn_rects["btn_req_reject"] = btn_reject
         
     def _init_map_obstacles(self):
         """初始化 2D 地圖障礙物"""
@@ -259,6 +438,31 @@ class RestrictedRPSGame:
 
     def _handle_rpg_events(self, event, mouse_pos):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # 處理連線邀請點擊
+            if self.pending_request:
+                if "btn_req_accept" in self.btn_rects and self.btn_rects["btn_req_accept"].collidepoint(mouse_pos):
+                    req_type = self.pending_request["type"]
+                    self.net_manager.send_data({
+                        "action": "interact_resp",
+                        "type": req_type,
+                        "accepted": True
+                    })
+                    self.pending_request = None
+                    if req_type == "battle":
+                        self._start_battle_mode()
+                    elif req_type == "trade":
+                        self._start_trade_mode()
+                    return
+                elif "btn_req_reject" in self.btn_rects and self.btn_rects["btn_req_reject"].collidepoint(mouse_pos):
+                    req_type = self.pending_request["type"]
+                    self.net_manager.send_data({
+                        "action": "interact_resp",
+                        "type": req_type,
+                        "accepted": False
+                    })
+                    self.pending_request = None
+                    return
+
             # 點擊頭部返回大廳按鈕
             if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
                 self.game_manager.game_phase = -1  # LOBBY
@@ -287,11 +491,45 @@ class RestrictedRPSGame:
                         break
 
         elif event.type == pygame.KEYDOWN:
+            if self.pending_request:
+                if event.key == pygame.K_y:
+                    req_type = self.pending_request["type"]
+                    self.net_manager.send_data({
+                        "action": "interact_resp",
+                        "type": req_type,
+                        "accepted": True
+                    })
+                    self.pending_request = None
+                    if req_type == "battle":
+                        self._start_battle_mode()
+                    elif req_type == "trade":
+                        self._start_trade_mode()
+                    return
+                elif event.key == pygame.K_n:
+                    req_type = self.pending_request["type"]
+                    self.net_manager.send_data({
+                        "action": "interact_resp",
+                        "type": req_type,
+                        "accepted": False
+                    })
+                    self.pending_request = None
+                    return
+
             # 快捷鍵切換日誌顯示
             if event.key == pygame.K_l:
                 self.show_logs = not self.show_logs
                 return
                 
+            # 優先處理連線玩家互動
+            if not self.is_offline and self._get_interactable_opponent():
+                if event.key == pygame.K_b:
+                    self._send_interact_request("battle")
+                elif event.key == pygame.K_t:
+                    self._send_interact_request("trade")
+                elif event.key in (pygame.K_e, pygame.K_RETURN):
+                    self._send_interact_request("battle")
+                return
+
             # 使用快捷鍵進行靠近 NPC 互動
             closest_npc = self._get_closest_active_npc()
             if closest_npc:
@@ -332,24 +570,62 @@ class RestrictedRPSGame:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 取消與返回
             if "btn_trade_cancel" in self.btn_rects and self.btn_rects["btn_trade_cancel"].collidepoint(mouse_pos):
+                if not self.is_offline:
+                    self.net_manager.send_data({
+                        "action": "cancel_trade"
+                    })
                 self.state = RPG_WALK
                 return
             
-            # 調節我方提供的物件 (give)
-            self._adjust_trade("give_rock", 1, self.player_cards["rock"], mouse_pos)
-            self._adjust_trade("give_paper", 1, self.player_cards["paper"], mouse_pos)
-            self._adjust_trade("give_scissors", 1, self.player_cards["scissors"], mouse_pos)
-            self._adjust_trade("give_star", 1, self.player_stars - 1, mouse_pos)  # 保留至少一顆星，防自殺
-            
-            # 調節對方提供的物件 (want)
-            self._adjust_trade("want_rock", 1, self.active_npc["cards"]["rock"], mouse_pos)
-            self._adjust_trade("want_paper", 1, self.active_npc["cards"]["paper"], mouse_pos)
-            self._adjust_trade("want_scissors", 1, self.active_npc["cards"]["scissors"], mouse_pos)
-            self._adjust_trade("want_star", 1, self.active_npc["stars"] - 1, mouse_pos)
-            
-            # 點擊確認發起交易
-            if "btn_trade_confirm" in self.btn_rects and self.btn_rects["btn_trade_confirm"].collidepoint(mouse_pos):
-                self._execute_npc_trade()
+            if self.is_offline:
+                # 調節我方提供的物件 (give)
+                self._adjust_trade("give_rock", 1, self.player_cards["rock"], mouse_pos)
+                self._adjust_trade("give_paper", 1, self.player_cards["paper"], mouse_pos)
+                self._adjust_trade("give_scissors", 1, self.player_cards["scissors"], mouse_pos)
+                self._adjust_trade("give_star", 1, self.player_stars - 1, mouse_pos)  # 保留至少一顆星，防自殺
+                
+                # 調節對方提供的物件 (want)
+                self._adjust_trade("want_rock", 1, self.active_npc["cards"]["rock"], mouse_pos)
+                self._adjust_trade("want_paper", 1, self.active_npc["cards"]["paper"], mouse_pos)
+                self._adjust_trade("want_scissors", 1, self.active_npc["cards"]["scissors"], mouse_pos)
+                self._adjust_trade("want_star", 1, self.active_npc["stars"] - 1, mouse_pos)
+                
+                # 點擊確認發起交易
+                if "btn_trade_confirm" in self.btn_rects and self.btn_rects["btn_trade_confirm"].collidepoint(mouse_pos):
+                    self._execute_npc_trade()
+            else:
+                # Online mode
+                old_offer = self.trade_offer.copy()
+                self._adjust_trade("give_rock", 1, self.player_cards["rock"], mouse_pos)
+                self._adjust_trade("give_paper", 1, self.player_cards["paper"], mouse_pos)
+                self._adjust_trade("give_scissors", 1, self.player_cards["scissors"], mouse_pos)
+                self._adjust_trade("give_star", 1, self.player_stars - 1, mouse_pos)
+                
+                self._adjust_trade("want_rock", 1, self.opponent_cards["rock"], mouse_pos)
+                self._adjust_trade("want_paper", 1, self.opponent_cards["paper"], mouse_pos)
+                self._adjust_trade("want_scissors", 1, self.opponent_cards["scissors"], mouse_pos)
+                self._adjust_trade("want_star", 1, self.opponent_stars - 1, mouse_pos)
+                
+                if self.trade_offer != old_offer:
+                    self.net_manager.send_data({
+                        "action": "sync_trade",
+                        "offer": self.trade_offer
+                    })
+                    self.trade_self_ready = False
+                    self.trade_opp_ready = False
+                    self.trade_message = "請在下方調整交易的卡牌或星星數量。"
+                    self.trade_msg_color = (180, 180, 190)
+                    
+                if "btn_trade_confirm" in self.btn_rects and self.btn_rects["btn_trade_confirm"].collidepoint(mouse_pos):
+                    self.trade_self_ready = True
+                    self.net_manager.send_data({
+                        "action": "confirm_trade"
+                    })
+                    self.trade_message = "已確認提案，等待對手確認..."
+                    self.trade_msg_color = (100, 200, 100)
+                    
+                    if self.trade_self_ready and self.trade_opp_ready:
+                        self._execute_online_trade()
 
     def _handle_battle_events(self, event, mouse_pos):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -364,12 +640,23 @@ class RestrictedRPSGame:
                 # 確定出牌
                 if "btn_battle_confirm" in self.btn_rects and self.btn_rects["btn_battle_confirm"].collidepoint(mouse_pos):
                     if self.player_selected_card:
-                        self._resolve_battle_clash()
-                        
+                        if not self.is_offline:
+                            self.battle_phase = "waiting"
+                            self.net_manager.send_data({
+                                "action": "play_card",
+                                "card_type": self.player_selected_card
+                            })
+                            if self.opponent_selected_card:
+                                self._resolve_online_battle()
+                        else:
+                            self._resolve_battle_clash()
+                            
             elif self.battle_phase == "result":
                 # 返回地圖按鈕
                 if "btn_battle_finish" in self.btn_rects and self.btn_rects["btn_battle_finish"].collidepoint(mouse_pos):
                     self.state = RPG_WALK
+                    self.player_selected_card = None
+                    self.opponent_selected_card = None
                     self._check_game_over_conditions()
 
     def _handle_summary_events(self, event, mouse_pos):
@@ -644,6 +931,17 @@ class RestrictedRPSGame:
         # 2. 限制玩家不能超出地圖邊緣
         self.player_x = max(CHAR_RADIUS, min(self.player_x, self.world_width - CHAR_RADIUS))
         self.player_y = max(CHAR_RADIUS, min(self.player_y, self.world_height - CHAR_RADIUS))
+
+        # 聯機模式下，若玩家位置移動，則同步給對手
+        if not self.is_offline and self.net_manager:
+            if not hasattr(self, "last_sent_x") or not hasattr(self, "last_sent_y") or abs(self.player_x - self.last_sent_x) > 1.0 or abs(self.player_y - self.last_sent_y) > 1.0:
+                self.net_manager.send_data({
+                    "action": "sync_pos",
+                    "x": self.player_x,
+                    "y": self.player_y
+                })
+                self.last_sent_x = self.player_x
+                self.last_sent_y = self.player_y
         
         # 3. 相機跟隨玩家，並夾逼在世界範圍內
         self.camera_x = int(self.player_x - 1000 // 2)
@@ -760,6 +1058,8 @@ class RestrictedRPSGame:
             self._draw_setup(surface, mouse_pos)
         elif self.state == RPG_WALK:
             self._draw_rpg_walk(surface, mouse_pos)
+            if self.state == RPG_WALK and self.pending_request:
+                self._draw_request_popup(surface, mouse_pos)
         elif self.state == DIALOGUE:
             self._draw_dialogue(surface, mouse_pos)
         elif self.state == TRADE:
@@ -889,7 +1189,37 @@ class RestrictedRPSGame:
             lbl_st = get_font(10).render(status_txt, True, color_st)
             surface.blit(lbl_st, lbl_st.get_rect(center=(scr_x, scr_y + CHAR_RADIUS + 12)))
 
-        # 4. 繪製玩家主角
+        # 4. 繪製對手玩家 (如果不是離線模式)
+        if not self.is_offline:
+            opp_scr_x = int(self.opponent_x - self.camera_x)
+            opp_scr_y = int(self.opponent_y - self.camera_y)
+            
+            # 判斷滑鼠是否懸停於對手
+            dist_mouse = math.hypot(mouse_pos[0] - opp_scr_x, mouse_pos[1] - opp_scr_y)
+            opp_hovered = (dist_mouse < CHAR_RADIUS + 5)
+            
+            # 靠近時亮起互動提示圈
+            dist_player = math.hypot(self.opponent_x - self.player_x, self.opponent_y - self.player_y)
+            is_near_opp = (dist_player < 65)
+            
+            if is_near_opp:
+                pygame.draw.circle(surface, (100, 255, 100), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 8, width=1)
+                
+            if opp_hovered:
+                pygame.draw.circle(surface, (255, 255, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 4, width=2)
+                
+            # 本體
+            pygame.draw.circle(surface, (100, 180, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS)
+            pygame.draw.circle(surface, (10, 10, 15), (opp_scr_x, opp_scr_y), CHAR_RADIUS, width=1)
+            
+            # 名字與星星
+            lbl_opp = get_font(12, bold=True).render(self.opponent_name, True, (100, 180, 255))
+            surface.blit(lbl_opp, lbl_opp.get_rect(center=(opp_scr_x, opp_scr_y - CHAR_RADIUS - 12)))
+            
+            lbl_opp_st = get_font(10).render(f"⭐ {self.opponent_stars}", True, (245, 220, 90))
+            surface.blit(lbl_opp_st, lbl_opp_st.get_rect(center=(opp_scr_x, opp_scr_y + CHAR_RADIUS + 12)))
+
+        # 5. 繪製玩家主角
         p_scr_x = int(self.player_x - self.camera_x)
         p_scr_y = int(self.player_y - self.camera_y)
         pygame.draw.circle(surface, (255, 215, 0), (p_scr_x, p_scr_y), CHAR_RADIUS + 2, width=2)
@@ -898,15 +1228,26 @@ class RestrictedRPSGame:
         lbl_p = get_font(12, bold=True).render("YOU", True, (255, 215, 0))
         surface.blit(lbl_p, lbl_p.get_rect(center=(p_scr_x, p_scr_y)))
         
-        # 5. 繪製快捷互動按鈕提示 (若靠近某 NPC)
-        closest_npc = self._get_closest_active_npc()
-        if closest_npc:
+        # 6. 繪製快捷互動按鈕提示 (若靠近某 NPC 或對手玩家)
+        if not self.is_offline and self._get_interactable_opponent():
             tip_rect = pygame.Rect(350, 440, 300, 32)
             pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
             pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
             
-            t_s = get_font(13).render(f"靠近 {closest_npc['name']}！按 [ENTER/E]對話 | [B]對戰 | [T]交易", True, (220, 255, 220))
+            if self.sent_request:
+                t_s = get_font(13).render(f"已發送 {self.sent_request} 邀請，等待對手回應...", True, (220, 255, 220))
+            else:
+                t_s = get_font(13).render(f"靠近 {self.opponent_name}！按 [B]對決 | [T]交易", True, (220, 255, 220))
             surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
+        else:
+            closest_npc = self._get_closest_active_npc()
+            if closest_npc:
+                tip_rect = pygame.Rect(350, 440, 300, 32)
+                pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
+                pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
+                
+                t_s = get_font(13).render(f"靠近 {closest_npc['name']}！按 [ENTER/E]對話 | [B]對戰 | [T]交易", True, (220, 255, 220))
+                surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
             
         # 6. 右下角即時對決動態日誌面板 (可被切換隱藏以避免阻擋玩家視野)
         if self.show_logs:
@@ -961,6 +1302,11 @@ class RestrictedRPSGame:
                 cir_rock += npc["cards"]["rock"]
                 cir_paper += npc["cards"]["paper"]
                 cir_scissors += npc["cards"]["scissors"]
+        if not self.is_offline:
+            cir_stars += self.opponent_stars
+            cir_rock += self.opponent_cards["rock"]
+            cir_paper += self.opponent_cards["paper"]
+            cir_scissors += self.opponent_cards["scissors"]
                 
         lbl_cir_stars = get_font(11).render(f"流通星星總數: {cir_stars} 顆", True, (245, 220, 90))
         lbl_cir_cards = get_font(11).render(f"石頭: {cir_rock} 張 | 布: {cir_paper} 張 | 剪刀: {cir_scissors} 張", True, (200, 200, 210))
@@ -1043,8 +1389,17 @@ class RestrictedRPSGame:
         """渲染限定剪刀石頭布「星之船交易面板」"""
         draw_gradient_background(surface, (15, 16, 22), (25, 28, 38))
         
+        if not self.is_offline:
+            opp_name = self.opponent_name
+            opp_stars = self.opponent_stars
+            opp_cards = self.opponent_cards
+        else:
+            opp_name = self.active_npc["name"]
+            opp_stars = self.active_npc["stars"]
+            opp_cards = self.active_npc["cards"]
+
         # 標題
-        title_s = get_font(26, bold=True).render(f"與 {self.active_npc['name']} 的交涉交易", True, (100, 200, 255))
+        title_s = get_font(26, bold=True).render(f"與 {opp_name} 的交涉交易", True, (100, 200, 255))
         surface.blit(title_s, title_s.get_rect(center=(500, 60)))
         
         # 說明
@@ -1111,10 +1466,10 @@ class RestrictedRPSGame:
             if t == "star":
                 draw_star(surface, 570, cy + 12, 10, (255, 215, 0))
                 txt_lbl = "星星 (Star)"
-                curr_own = self.active_npc["stars"]
+                curr_own = opp_stars
             else:
                 txt_lbl = self._trans_card(t)
-                curr_own = self.active_npc["cards"][t]
+                curr_own = opp_cards[t]
                 
             lbl_res = get_font(14).render(f"{txt_lbl} (持:{curr_own})", True, (220, 220, 225))
             surface.blit(lbl_res, (600, cy))
@@ -1150,14 +1505,17 @@ class RestrictedRPSGame:
         draw_button(surface, cancel_rect, "取消交易並返回", (55, 55, 60), (75, 75, 85), (220, 220, 220), cnh, get_font(16))
         self.btn_rects["btn_trade_cancel"] = cancel_rect
         
-        # 智慧型對話氣泡提示 NPC 目前的動態心聲
+        # 智慧型對話氣泡提示 NPC 目前的動態心聲 / 雙方聯機確認狀態
         bubble_rect = pygame.Rect(180, 590, 640, 55)
         pygame.draw.rect(surface, (20, 20, 28), bubble_rect, border_radius=6)
         pygame.draw.rect(surface, (45, 45, 55), bubble_rect, width=1, border_radius=6)
         
-        name = self.active_npc["name"]
-        t_tot = sum(self.active_npc["cards"].values())
-        quote = f"{name} 目前心聲：『我手裡多餘的牌是 {', '.join([self._trans_card(k) for k,v in self.active_npc['cards'].items() if v >= 2]) or '無'}，我需要星數至少高於 3 顆...』"
+        if not self.is_offline:
+            quote = f"雙方確認狀態：您: {'[已確認]' if self.trade_self_ready else '[未確認]'} | 對手: {'[已確認]' if self.trade_opp_ready else '[未確認]'}"
+        else:
+            name = self.active_npc["name"]
+            quote = f"{name} 目前心聲：『我手裡多餘的牌是 {', '.join([self._trans_card(k) for k,v in self.active_npc['cards'].items() if v >= 2]) or '無'}，我需要星數至少高於 3 顆...』"
+            
         lbl_q = get_font(12).render(quote, True, (160, 160, 175))
         surface.blit(lbl_q, lbl_q.get_rect(center=bubble_rect.center))
 
@@ -1165,13 +1523,21 @@ class RestrictedRPSGame:
         """渲染經典卡牌對戰 clash 畫面"""
         draw_gradient_background(surface, (15, 15, 25), (30, 25, 40))
         
+        if not self.is_offline:
+            opp_name = self.opponent_name
+            opp_stars = self.opponent_stars
+            opp_tot_cards = sum(self.opponent_cards.values())
+        else:
+            opp_name = self.active_npc["name"]
+            opp_stars = self.active_npc["stars"]
+            opp_tot_cards = sum(self.active_npc["cards"].values())
+
         # 標題
-        lbl_title = get_font(26, bold=True).render(f"與 {self.active_npc['name']} 進行限定對決", True, (255, 215, 0))
+        lbl_title = get_font(26, bold=True).render(f"與 {opp_name} 進行限定對決", True, (255, 215, 0))
         surface.blit(lbl_title, lbl_title.get_rect(center=(500, 60)))
         
         # 雙方資產
-        tot_npc_cards = sum(self.active_npc['cards'].values())
-        lbl_npc_ast = get_font(14).render(f"對手資產: ⭐ x {self.active_npc['stars']}  | 剩餘牌數: {tot_npc_cards}張", True, (180, 180, 190))
+        lbl_npc_ast = get_font(14).render(f"對手資產: ⭐ x {opp_stars}  | 剩餘牌數: {opp_tot_cards}張", True, (180, 180, 190))
         surface.blit(lbl_npc_ast, lbl_npc_ast.get_rect(center=(500, 100)))
         
         # 桌面上發牌卡槽
@@ -1186,7 +1552,7 @@ class RestrictedRPSGame:
         surface.blit(lbl_p_slot, lbl_p_slot.get_rect(center=player_slot.center))
         
         # 繪製卡牌內容
-        if self.battle_phase == "select":
+        if self.battle_phase in ("select", "waiting"):
             # 繪製背面圖示在 NPC 卡槽
             pygame.draw.rect(surface, (40, 35, 55), npc_slot, border_radius=8)
             pygame.draw.rect(surface, (255, 215, 0), npc_slot, width=2, border_radius=8)
@@ -1197,37 +1563,41 @@ class RestrictedRPSGame:
             if self.player_selected_card:
                 self._draw_single_card(surface, player_slot, self.player_selected_card, face_up=True)
                 
-            # 繪製下方選牌區
-            lbl_sel = get_font(15, bold=True).render("◆ 請從剩餘手牌中挑選一張打出 ◆", True, (200, 200, 210))
-            surface.blit(lbl_sel, lbl_sel.get_rect(center=(500, 580)))
-            
-            card_types = ["rock", "paper", "scissors"]
-            for idx, ctype in enumerate(card_types):
-                btn_card = pygame.Rect(260 + idx * 160, 605, 120, 42)
-                ch = btn_card.collidepoint(mouse_pos)
-                is_selected = (self.player_selected_card == ctype)
-                cnt = self.player_cards[ctype]
+            if self.battle_phase == "select":
+                lbl_sel = get_font(15, bold=True).render("◆ 請從剩餘手牌中挑選一張打出 ◆", True, (200, 200, 210))
+                surface.blit(lbl_sel, lbl_sel.get_rect(center=(500, 580)))
                 
-                if cnt == 0:
-                    bg = (30, 30, 35)
-                    fg = (80, 80, 85)
-                else:
-                    bg = (255, 215, 0) if is_selected else ((50, 45, 65) if ch else (35, 30, 45))
-                    fg = (15, 15, 20) if is_selected else (220, 220, 230)
+                card_types = ["rock", "paper", "scissors"]
+                for idx, ctype in enumerate(card_types):
+                    btn_card = pygame.Rect(260 + idx * 160, 605, 120, 42)
+                    ch = btn_card.collidepoint(mouse_pos)
+                    is_selected = (self.player_selected_card == ctype)
+                    cnt = self.player_cards[ctype]
                     
-                draw_button(surface, btn_card, f"{self._trans_card(ctype)} ({cnt})", bg, bg, fg, False, get_font(13, bold=True))
-                self.btn_rects[f"btn_card_{ctype}"] = btn_card
-                
-            # 確定按鈕
-            if self.player_selected_card:
-                btn_ok = pygame.Rect(750, 450, 140, 45)
-                okh = btn_ok.collidepoint(mouse_pos)
-                draw_button(surface, btn_ok, "確定出牌", (100, 220, 100), (80, 190, 80), (15, 15, 20), okh, get_font(15, bold=True))
-                self.btn_rects["btn_battle_confirm"] = btn_ok
+                    if cnt == 0:
+                        bg = (30, 30, 35)
+                        fg = (80, 80, 85)
+                    else:
+                        bg = (255, 215, 0) if is_selected else ((50, 45, 65) if ch else (35, 30, 45))
+                        fg = (15, 15, 20) if is_selected else (220, 220, 230)
+                        
+                    draw_button(surface, btn_card, f"{self._trans_card(ctype)} ({cnt})", bg, bg, fg, False, get_font(13, bold=True))
+                    self.btn_rects[f"btn_card_{ctype}"] = btn_card
+                    
+                # 確定按鈕
+                if self.player_selected_card:
+                    btn_ok = pygame.Rect(750, 450, 140, 45)
+                    okh = btn_ok.collidepoint(mouse_pos)
+                    draw_button(surface, btn_ok, "確定出牌", (100, 220, 100), (80, 190, 80), (15, 15, 20), okh, get_font(15, bold=True))
+                    self.btn_rects["btn_battle_confirm"] = btn_ok
+            else:
+                lbl_wait = get_font(16, bold=True).render("◆ 已出牌，等待對手出牌... ◆", True, (100, 200, 255))
+                surface.blit(lbl_wait, lbl_wait.get_rect(center=(500, 580)))
                 
         elif self.battle_phase == "result":
             # 雙方皆揭牌
-            self._draw_single_card(surface, npc_slot, self.npc_selected_card, face_up=True)
+            opp_card = self.opponent_selected_card if not self.is_offline else self.npc_selected_card
+            self._draw_single_card(surface, npc_slot, opp_card, face_up=True)
             self._draw_single_card(surface, player_slot, self.player_selected_card, face_up=True)
             
             # 中間顯示勝負結果與特效
@@ -1316,8 +1686,15 @@ class RestrictedRPSGame:
         surface.blit(lbl_l2, (300, 365))
         
         # 戰績評估
-        total_npc_lose = sum([1 for n in self.npcs if n["status"] == "LOSE"])
-        lbl_npc_cnt = get_font(12).render(f"本場對局中，共有 {total_npc_lose} 名 NPC 出局並被拖入地下暗室。", True, (130, 130, 140))
+        if not self.is_offline:
+            opp_win = (self.opponent_stars >= 3)
+            opp_res_str = "順利通關" if opp_win else "負債敗北"
+            eval_str = f"本場聯機對決中，您的對手 {self.opponent_name} 最終狀態為：{opp_res_str} (⭐ x {self.opponent_stars})。"
+        else:
+            total_npc_lose = sum([1 for n in self.npcs if n["status"] == "LOSE"])
+            eval_str = f"本場對局中，共有 {total_npc_lose} 名 NPC 出局並被拖入地下暗室。"
+            
+        lbl_npc_cnt = get_font(12).render(eval_str, True, (130, 130, 140))
         surface.blit(lbl_npc_cnt, (300, 420))
         
         # 返回遊戲大廳

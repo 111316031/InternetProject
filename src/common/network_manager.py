@@ -44,6 +44,7 @@ class NetworkManager:
         
         # 嘗試載入隊友開發的 C 連線對接包
         self.connection = None
+        self.game_type = "ecard"  # "ecard" or "rps"
         self._load_connection_module()
 
     def _load_connection_module(self):
@@ -160,9 +161,15 @@ class NetworkManager:
             return False, "未連線"
             
         if self.is_host:
-            # 主機模式下，攔截主機玩家出牌與選角封包，進行本地伺服器規則模擬
-            self._process_host_send(data_dict)
-            return True, "發送成功 (主機模擬)"
+            if self.game_type == "rps":
+                if not self.sock:
+                    return True, "模擬發送成功"
+                self._send_to_client(data_dict)
+                return True, "發送成功"
+            else:
+                # 主機模式下，攔截主機玩家出牌與選角封包，進行本地伺服器規則模擬
+                self._process_host_send(data_dict)
+                return True, "發送成功 (主機模擬)"
             
         # 模擬模式直接回傳成功
         if not self.sock:
@@ -401,7 +408,13 @@ class NetworkManager:
                         data_dict = json.loads(json_str)
                         if self.is_host:
                             # 主機攔截客機資料並在本地做伺服器邏輯分發
-                            self._process_client_msg(data_dict)
+                            if self.game_type == "rps":
+                                if data_dict.get("action") == "handshake":
+                                    self._process_client_msg(data_dict)
+                                else:
+                                    self._deliver_local(data_dict)
+                            else:
+                                self._process_client_msg(data_dict)
                         else:
                             # 客機直接投遞至連線回呼
                             if self.on_receive_message:
