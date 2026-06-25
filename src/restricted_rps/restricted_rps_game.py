@@ -429,7 +429,6 @@ class RestrictedRPSGame:
             for npc in self.npcs:
                 if npc["status"] == "WANDERING":
                     npc["status"] = "LOSE"
-                    npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
             for opp_name, opp_info in self.other_players.items():
                 opp_stars = opp_info.get("stars", 0)
                 opp_cards = opp_info.get("cards_count", 0)
@@ -1437,7 +1436,6 @@ class RestrictedRPSGame:
                 npc_total_cards = sum(npc["cards"].values())
                 if npc["stars"] <= 0:
                     npc["status"] = "LOSE"
-                    npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
                     self.add_log(f"[出局] {npc['name']}被黑衣人抓走了！")
                 elif npc_total_cards == 0:
                     if npc["stars"] >= 3:
@@ -1445,7 +1443,6 @@ class RestrictedRPSGame:
                         self.add_log(f"[通關] NPC {npc['name']} 卡牌已用罄且持有 {npc['stars']} 顆星，順利清債通關！")
                     else:
                         npc["status"] = "LOSE"
-                        npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
                         self.add_log(f"[出局] {npc['name']}被黑衣人抓走了！")
 
         # 5. 背景 NPC 對戰與交易離線模擬 (每 5-6 秒隨機觸發一次，讓星之船活起來)
@@ -1492,7 +1489,6 @@ class RestrictedRPSGame:
                     for npc in self.npcs:
                         if npc["status"] == "WANDERING":
                             npc["status"] = "LOSE"
-                            npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
                             self.add_log(f"[出局] {npc['name']}手牌未出完，被黑衣人抓走了！")
                     for opp_name, opp_info in self.other_players.items():
                         opp_stars = opp_info.get("stars", 0)
@@ -2368,8 +2364,8 @@ class RestrictedRPSGame:
             results.append({
                 "name": f"NPC {npc['name']}",
                 "status": "SAFE" if is_npc_safe else "LOSE",
-                "stars": npc["stars"] if npc["status"] != "LOSE" else 0,
-                "cards": npc_cards if npc["status"] != "LOSE" else 0
+                "stars": npc["stars"],
+                "cards": npc_cards
             })
             
         results.sort(key=lambda x: (1 if x["status"] == "SAFE" else 0, x["stars"], -x["cards"]), reverse=True)
