@@ -435,6 +435,9 @@ class RestrictedRPSGame:
                 
             # 返回大廳按鈕
             if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.disconnect()
+                self.cleanup()
                 self.game_manager.game_phase = -1  # LOBBY
 
     def _handle_rpg_events(self, event, mouse_pos):
@@ -466,6 +469,9 @@ class RestrictedRPSGame:
 
             # 點擊頭部返回大廳按鈕
             if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.disconnect()
+                self.cleanup()
                 self.game_manager.game_phase = -1  # LOBBY
                 return
                 
@@ -663,6 +669,9 @@ class RestrictedRPSGame:
     def _handle_summary_events(self, event, mouse_pos):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.disconnect()
+                self.cleanup()
                 self.game_manager.game_phase = -1  # LOBBY
 
     # ==========================================
