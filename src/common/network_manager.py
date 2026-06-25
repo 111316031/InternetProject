@@ -68,6 +68,9 @@ class NetworkManager:
 
     def connect(self, ip, port):
         """Client 模式：非同步在背景連線至指定中央伺服器並加入房間"""
+        if self.is_connecting or self.is_connected:
+            return True, "正在連線中..."
+            
         self.is_host = False
         self.server_ip = ip
         self.server_port = int(port)
@@ -84,9 +87,10 @@ class NetworkManager:
                 self.on_connected()
             return True, "模擬連線成功 (未加載 C 庫)"
             
+        self.is_connecting = True
+        
         def connect_thread():
             try:
-                self.is_connecting = True
                 py_socket = self.connection.connect_to_server(ip, self.server_port)
                 if py_socket:
                     # 檢查連線期間是否已手動取消/中斷

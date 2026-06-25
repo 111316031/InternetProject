@@ -461,7 +461,8 @@ def main():
                             
                     # 點擊測試連線按鈕 (僅在 CLIENT 模式下啟用)
                     elif test_conn_rect.collidepoint(mouse_pos) and connection_mode == "CLIENT":
-                        test_connection_async()
+                        if not net_manager.is_connecting and not net_manager.is_connected:
+                            test_connection_async()
                         
                     # 點擊啟動「國王與奴隸」遊戲
                     elif game_ecard_rect.collidepoint(mouse_pos):
@@ -477,12 +478,13 @@ def main():
                                 connection_status_msg = f"開房失敗: {msg}"
                                 connection_status_color = (255, 100, 100)
                         elif connection_mode == "CLIENT":
-                            connection_status_msg = "正在連線加入房主的中央伺服器..."
-                            connection_status_color = (200, 200, 100)
-                            success, msg = net_manager.connect(server_ip, server_port)
-                            if not success:
-                                connection_status_msg = f"連線加入失敗: {msg}"
-                                connection_status_color = (255, 100, 100)
+                            if not net_manager.is_connecting and not net_manager.is_connected:
+                                connection_status_msg = "正在連線加入房主的中央伺服器..."
+                                connection_status_color = (200, 200, 100)
+                                success, msg = net_manager.connect(server_ip, server_port)
+                                if not success:
+                                    connection_status_msg = f"連線加入失敗: {msg}"
+                                    connection_status_color = (255, 100, 100)
                                 
                     # 點擊啟動「限定剪刀石頭布」遊戲
                     elif game_locked_rect.collidepoint(mouse_pos):
@@ -499,12 +501,13 @@ def main():
                                 connection_status_msg = f"開房失敗: {msg}"
                                 connection_status_color = (255, 100, 100)
                         elif connection_mode == "CLIENT":
-                            connection_status_msg = "正在連線加入房主的中央伺服器..."
-                            connection_status_color = (200, 200, 100)
-                            success, msg = net_manager.connect(server_ip, server_port)
-                            if not success:
-                                connection_status_msg = f"連線加入失敗: {msg}"
-                                connection_status_color = (255, 100, 100)
+                            if not net_manager.is_connecting and not net_manager.is_connected:
+                                connection_status_msg = "正在連線加入房主的中央伺服器..."
+                                connection_status_color = (200, 200, 100)
+                                success, msg = net_manager.connect(server_ip, server_port)
+                                if not success:
+                                    connection_status_msg = f"連線加入失敗: {msg}"
+                                    connection_status_color = (255, 100, 100)
                                 
                     # 點擊離開程式
                     elif exit_btn_rect.collidepoint(mouse_pos):
