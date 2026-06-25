@@ -351,6 +351,13 @@ def main():
     pygame.display.set_caption("E-Game Center 遊戲娛樂大廳")
     clock = pygame.time.Clock()
     
+    # 初始化剪貼簿與鍵盤長按重複發送機制
+    try:
+        pygame.scrap.init()
+    except Exception as e:
+        print(f"Scrap init failed: {e}")
+    pygame.key.set_repeat(400, 30)
+    
     game.game_phase = LOBBY
     
     # 房間大廳非同步事件掛鉤
@@ -548,7 +555,44 @@ def main():
             # 大廳設定文字輸入處理
             elif event.type == pygame.KEYDOWN:
                 if game.game_phase == LOBBY and active_input_field:
-                    if event.key == pygame.K_BACKSPACE:
+                    if (event.key == pygame.K_v) and (event.mod & pygame.KMOD_CTRL):
+                        # Ctrl + V paste
+                        try:
+                            clipboard_data = pygame.scrap.get(pygame.SCRAP_TEXT)
+                            if clipboard_data:
+                                text_to_paste = clipboard_data.decode('utf-8', errors='ignore').rstrip('\x00')
+                                # Filter characters to only printable ones
+                                text_to_paste = "".join(c for c in text_to_paste if c.isprintable())
+                                if active_input_field == "IP":
+                                    for char in text_to_paste:
+                                        if len(server_ip) < 15:
+                                            server_ip += char
+                                elif active_input_field == "PORT":
+                                    for char in text_to_paste:
+                                        if len(server_port) < 5 and char.isdigit():
+                                            server_port += char
+                                elif active_input_field == "NAME":
+                                    for char in text_to_paste:
+                                        if len(player_name) < 12:
+                                            player_name += char
+                        except Exception as e:
+                            print(f"Paste error: {e}")
+                    elif (event.key == pygame.K_c) and (event.mod & pygame.KMOD_CTRL):
+                        # Ctrl + C copy
+                        try:
+                            text_to_copy = ""
+                            if active_input_field == "IP":
+                                text_to_copy = server_ip
+                            elif active_input_field == "PORT":
+                                text_to_copy = server_port
+                            elif active_input_field == "NAME":
+                                text_to_copy = player_name
+                            
+                            if text_to_copy:
+                                pygame.scrap.put(pygame.SCRAP_TEXT, text_to_copy.encode('utf-8'))
+                        except Exception as e:
+                            print(f"Copy error: {e}")
+                    elif event.key == pygame.K_BACKSPACE:
                         if active_input_field == "IP":
                             server_ip = server_ip[:-1]
                         elif active_input_field == "PORT":
@@ -558,17 +602,19 @@ def main():
                     elif event.key in (pygame.K_RETURN, pygame.K_ESCAPE):
                         active_input_field = None
                     else:
-                        char = event.unicode
-                        if char and char.isprintable():
-                            if active_input_field == "IP":
-                                if len(server_ip) < 15:
-                                    server_ip += char
-                            elif active_input_field == "PORT":
-                                if len(server_port) < 5 and char.isdigit():
-                                    server_port += char
-                            elif active_input_field == "NAME":
-                                if len(player_name) < 12:
-                                    player_name += char
+                        # 避免 Ctrl 組合鍵被當作普通字元輸入
+                        if not (event.mod & pygame.KMOD_CTRL):
+                            char = event.unicode
+                            if char and char.isprintable():
+                                if active_input_field == "IP":
+                                    if len(server_ip) < 15:
+                                        server_ip += char
+                                elif active_input_field == "PORT":
+                                    if len(server_port) < 5 and char.isdigit():
+                                        server_port += char
+                                elif active_input_field == "NAME":
+                                    if len(player_name) < 12:
+                                        player_name += char
                                     
         # 位置更新與畫面渲染
         if game.game_phase == RPS_GAME and rps_game_instance is not None:
