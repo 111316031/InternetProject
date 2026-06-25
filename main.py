@@ -1,4 +1,4 @@
-# filepath: C:\Users\ethan\Desktop\Project\main.py
+# filepath: C:\Users\ethan\Desktop\Project-Combine\main.py
 """
 E-Game Center 遊戲娛樂大廳 - 主程序入口
 =====================================
@@ -6,12 +6,18 @@ E-Game Center 遊戲娛樂大廳 - 主程序入口
 負責大廳 UI 渲染、Socket 連線測試與管理，以及子遊戲的生命週期管理與事件分流。
 本大廳支援 E-Card (國王與奴隸) 與 Restricted RPS (限定剪刀石頭布)。
 各遊戲實例與繪圖代碼完全模組化分開。
+
+重構亮點：
+1. 房主 Host 點擊開房時，自動在背景啟動中央伺服器，雙方都連線至伺服器。
+2. 支援大廳多人 Slot 動態渲染。
+3. 只要有人斷線退出，大廳直接解散。
 """
 
 import pygame
 import sys
 import threading
 import socket
+import json
 
 # 匯入邏輯、視覺元件與各遊戲模組
 from src.ecard import ecard_logic
@@ -29,8 +35,9 @@ WINDOW_HEIGHT = 700
 FPS = 60
 
 # 大廳與子遊戲狀態常數
-LOBBY = -1
-RPS_GAME = 10
+ROOM_LOBBY = -2  # 房間大廳狀態
+LOBBY = -1       # 首頁大廳狀態
+RPS_GAME = 10    # 石頭布遊戲狀態
 
 # 遊戲物件實例化
 game = ecard_logic.EcardGame()
@@ -41,31 +48,37 @@ ecard_game_instance = None
 # 大廳文字輸入與連線設定
 server_ip = "127.0.0.1"
 server_port = "8888"
-player_name = "Player"  # 玩家設定的暱稱
-connection_mode = "OFFLINE"  # 預設為離線單機 (AI 對戰)；支援 "OFFLINE", "HOST", "CLIENT"
-is_waiting_connection = False # 主機開房等待對手連線狀態
-active_input_field = None  # 當前聚焦輸入框 ("IP", "PORT", "NAME" 或 None)
+player_name = "Player"        # 玩家設定的暱稱
+connection_mode = "OFFLINE"   # 預設為離線單機；支援 "OFFLINE", "HOST", "CLIENT"
+is_waiting_connection = False # 連線等待狀態
+active_input_field = None     # 當前聚焦輸入框
 
 connection_status_msg = "目前為單機離線模式，可直接啟動對決"
 connection_status_color = (150, 150, 160)
 
-# 各按鈕的點擊感應區
+# 各按鈕的點擊感應區 (首頁大廳)
 toggle_mode_rect = pygame.Rect(280, 250, 180, 35)
 test_conn_rect = pygame.Rect(540, 250, 180, 35)
-ip_input_rect = pygame.Rect(200, 190, 180, 30)       # 寬度調整並向左移
-port_input_rect = pygame.Rect(410, 190, 80, 30)      # 向左移
-name_input_rect = pygame.Rect(520, 190, 180, 30)      # 新增名字輸入框區
+ip_input_rect = pygame.Rect(200, 190, 180, 30)
+port_input_rect = pygame.Rect(410, 190, 80, 30)
+name_input_rect = pygame.Rect(520, 190, 180, 30)
 game_ecard_rect = pygame.Rect(200, 390, 280, 160)
 game_locked_rect = pygame.Rect(520, 390, 280, 160)
 exit_btn_rect = pygame.Rect(400, 590, 200, 45)
+
+# 各按鈕的點擊感應區 (房間大廳 ROOM_LOBBY)
+room_add_bot_rect = pygame.Rect(540, 200, 240, 45)
+room_start_game_rect = pygame.Rect(540, 270, 240, 45)
+room_remove_bot_rect = pygame.Rect(540, 340, 240, 45)
+room_leave_rect = pygame.Rect(540, 440, 240, 45)
 
 # ==========================================
 # 網路連線非同步回呼處理 (Network Callbacks)
 # ==========================================
 def on_net_connected():
-    """與伺服器成功連線時的回呼"""
+    """與中央伺服器成功連線時的回呼"""
     global connection_status_msg, connection_status_color
-    connection_status_msg = "成功與遊戲伺服器建立連線！"
+    connection_status_msg = "已成功連入中央伺服器！"
     connection_status_color = (100, 255, 100)
 
 def on_net_disconnected(reason):
@@ -74,9 +87,9 @@ def on_net_disconnected(reason):
     connection_status_msg = f"連線已中斷: {reason}"
     connection_status_color = (255, 100, 100)
     
-    # 若在對決過程中斷線，將強制返回大廳
+    # 強制返回首頁大廳
     if game.game_phase != LOBBY:
-        game.reset_scores()
+        game.reset_scores() if hasattr(game, "reset_scores") else None
         game.game_phase = LOBBY
         if ecard_game_instance is not None:
             ecard_game_instance.cleanup()
@@ -91,7 +104,7 @@ def on_net_error(err_msg):
     connection_status_msg = f"通訊錯誤: {err_msg}"
     connection_status_color = (255, 100, 100)
 
-# 註冊網路大廳回呼函數
+# 註冊基本網路回呼
 net_manager.on_connected = on_net_connected
 net_manager.on_disconnected = on_net_disconnected
 net_manager.on_error = on_net_error
@@ -100,31 +113,32 @@ net_manager.on_error = on_net_error
 # 網路連線測試背景執行緒
 # ==========================================
 def run_connection_test():
-    """執行非同步 Socket 連線測試，防止 UI 渲染執行緒凍結"""
+    """執行非同步 Port 連線測試"""
     global connection_status_msg, connection_status_color
-    connection_status_msg = "伺服器測試連線中..."
+    connection_status_msg = "測試連線中..."
     connection_status_color = (200, 200, 100)
     
-    success, msg = net_manager.connect(server_ip, server_port)
-    if success:
-        connection_status_msg = "伺服器測試連線成功！"
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(3.0)
+    try:
+        sock.connect((server_ip, int(server_port)))
+        connection_status_msg = "伺服器可成功連線！"
         connection_status_color = (100, 255, 100)
-        net_manager.disconnect()
-    else:
-        connection_status_msg = f"伺服器測試連線失敗: {msg}"
+        sock.close()
+    except Exception as e:
+        connection_status_msg = f"連線失敗: {str(e)}"
         connection_status_color = (255, 100, 100)
 
 def test_connection_async():
     threading.Thread(target=run_connection_test, daemon=True).start()
 
 # ==========================================
-# 遊戲大廳介面繪製 (Lobby Render)
+# 遊戲大廳首頁繪製 (Lobby Render)
 # ==========================================
 def draw_lobby_scene(surface, mouse_pos):
     """繪製遊戲大廳首頁"""
     draw_gradient_background(surface, (12, 14, 20), (22, 24, 30))
     
-    # 頂部霓虹標題
     font_title = get_font(42, bold=True)
     title_surf = font_title.render("E - GAME LOBBY 遊戲大廳", True, (220, 200, 160))
     title_rect = title_surf.get_rect(center=(WINDOW_WIDTH // 2, 70))
@@ -133,9 +147,6 @@ def draw_lobby_scene(surface, mouse_pos):
     surface.blit(title_shadow, (title_rect.x + 3, title_rect.y + 3))
     surface.blit(title_surf, title_rect)
     
-    # ------------------------------------------
-    # 1. 網路設定看板 (配置 IP/Port / 離線連線開關)
-    # ------------------------------------------
     settings_area = pygame.Rect(180, 130, 640, 185)
     pygame.draw.rect(surface, (22, 22, 28), settings_area, border_radius=10)
     pygame.draw.rect(surface, (40, 40, 48), settings_area, width=1, border_radius=10)
@@ -143,7 +154,7 @@ def draw_lobby_scene(surface, mouse_pos):
     # 繪製輸入框
     font_input = get_font(16)
     if connection_mode == "HOST":
-        display_ip = "0.0.0.0 (本機監聽)"
+        display_ip = "一鍵啟用中央伺服器 (Host)"
         draw_input_box(surface, ip_input_rect, display_ip, False, "主機 IP 位址 (Host)", font_input)
     else:
         draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP" and connection_mode == "CLIENT"), "伺服器 IP 位址 (Host)", font_input)
@@ -159,19 +170,18 @@ def draw_lobby_scene(surface, mouse_pos):
         mode_hover_bg = (40, 65, 105)
         mode_txt_color = (255, 255, 255)
     elif connection_mode == "HOST":
-        mode_text = "模式: 網路連線 (開房 Host)"
+        mode_text = "模式: 網路大廳 (房主 Host)"
         mode_bg = (20, 120, 80)
         mode_hover_bg = (25, 150, 100)
         mode_txt_color = (255, 255, 255)
     else:
-        mode_text = "模式: 網路連線 (加入 Client)"
+        mode_text = "模式: 網路大廳 (加入 Client)"
         mode_bg = (200, 160, 20)
         mode_hover_bg = (170, 130, 15)
         mode_txt_color = (15, 15, 20)
         
     draw_button(surface, toggle_mode_rect, mode_text, mode_bg, mode_hover_bg, mode_txt_color, toggle_hover, get_font(14, bold=True))
     
-    # 測試連線按鈕 (僅在 CLIENT 模式下啟用/非變灰)
     test_enabled = (connection_mode == "CLIENT")
     test_hover = test_conn_rect.collidepoint(mouse_pos) and test_enabled
     test_bg = (50, 50, 55) if test_enabled else (30, 30, 32)
@@ -179,16 +189,12 @@ def draw_lobby_scene(surface, mouse_pos):
     test_txt_color = (220, 220, 220) if test_enabled else (90, 90, 95)
     draw_button(surface, test_conn_rect, "測試連線", test_bg, test_hover_bg, test_txt_color, test_hover, get_font(14))
     
-    # 顯示連線狀態提示
     font_status = get_font(13)
     status_surf = font_status.render(connection_status_msg, True, connection_status_color)
     status_rect = status_surf.get_rect(center=(WINDOW_WIDTH // 2, 292))
     surface.blit(status_surf, status_rect)
     
-    # ------------------------------------------
     # 2. 遊戲選擇卡牌
-    # ------------------------------------------
-    # 2.1 國王與奴隸遊戲按鈕
     ecard_hover = game_ecard_rect.collidepoint(mouse_pos)
     if ecard_hover:
         draw_glow(surface, game_ecard_rect, (200, 180, 130), border_radius=12)
@@ -197,7 +203,6 @@ def draw_lobby_scene(surface, mouse_pos):
     pygame.draw.rect(surface, bg_ec, game_ecard_rect, border_radius=12)
     pygame.draw.rect(surface, border_ec, game_ecard_rect, width=2, border_radius=12)
     
-    # 遊戲小圖示
     ui_components.draw_crown_icon(surface, game_ecard_rect.x + 60, game_ecard_rect.y + 60, 0.7, (255, 215, 0))
     ui_components.draw_slave_icon(surface, game_ecard_rect.right - 60, game_ecard_rect.y + 60, 0.7, (220, 20, 60))
     
@@ -206,7 +211,6 @@ def draw_lobby_scene(surface, mouse_pos):
     surface.blit(title_ec, title_ec.get_rect(center=(game_ecard_rect.centerx, game_ecard_rect.y + 115)))
     surface.blit(desc_ec, desc_ec.get_rect(center=(game_ecard_rect.centerx, game_ecard_rect.y + 140)))
     
-    # 2.2 限定剪刀石頭布遊戲按鈕
     rps_hover = game_locked_rect.collidepoint(mouse_pos)
     if rps_hover:
         draw_glow(surface, game_locked_rect, (100, 180, 255), border_radius=12)
@@ -215,28 +219,124 @@ def draw_lobby_scene(surface, mouse_pos):
     pygame.draw.rect(surface, bg_rps, game_locked_rect, border_radius=12)
     pygame.draw.rect(surface, border_rps, game_locked_rect, width=2, border_radius=12)
     
-    # 繪製星星與卡牌向量圖示
     cx, cy = game_locked_rect.centerx, game_locked_rect.y + 55
     restricted_rps_game.draw_star(surface, cx, cy - 5, 14, (255, 215, 0))
-    # 兩側畫小手牌
-    pygame.draw.rect(surface, (220, 80, 80), pygame.Rect(cx - 55, cy - 15, 22, 32), border_radius=3, width=1) # 紅色
-    pygame.draw.rect(surface, (130, 130, 140), pygame.Rect(cx + 33, cy - 15, 22, 32), border_radius=3, width=1) # 灰色
+    pygame.draw.rect(surface, (220, 80, 80), pygame.Rect(cx - 55, cy - 15, 22, 32), border_radius=3, width=1)
+    pygame.draw.rect(surface, (130, 130, 140), pygame.Rect(cx + 33, cy - 15, 22, 32), border_radius=3, width=1)
     
     title_rps = get_font(22, bold=True).render("限定剪刀石頭布", True, (240, 240, 245))
     desc_rps = get_font(13).render("2D RPG 探索與卡牌交易心理對決", True, (150, 150, 160))
     surface.blit(title_rps, title_rps.get_rect(center=(game_locked_rect.centerx, game_locked_rect.y + 115)))
     surface.blit(desc_rps, desc_rps.get_rect(center=(game_locked_rect.centerx, game_locked_rect.y + 140)))
     
-    # ------------------------------------------
-    # 3. 離開程式按鈕
-    # ------------------------------------------
     exit_hover = exit_btn_rect.collidepoint(mouse_pos)
     draw_button(surface, exit_btn_rect, "離開遊戲程式", (60, 20, 20), (120, 20, 25), (240, 220, 220), exit_hover, get_font(16, bold=True))
 
+
+# ==========================================
+# 房間大廳介面繪製 (Room Lobby Render)
+# ==========================================
+def draw_room_lobby_scene(surface, mouse_pos):
+    """繪製玩家已進入之房間大廳"""
+    draw_gradient_background(surface, (10, 15, 25), (20, 25, 35))
+    
+    font_title = get_font(36, bold=True)
+    game_name = "國王與奴隸 (E-Card)" if net_manager.game_type == "ecard" else "限定剪刀石頭布"
+    lobby_title = f"{game_name} - 大廳 (Room: {net_manager.room_id or '建立中'})"
+    title_surf = font_title.render(lobby_title, True, (220, 200, 160))
+    title_rect = title_surf.get_rect(center=(WINDOW_WIDTH // 2, 70))
+    surface.blit(title_surf, title_rect)
+    
+    lobby_area = pygame.Rect(150, 130, 700, 420)
+    pygame.draw.rect(surface, (22, 24, 30), lobby_area, border_radius=12)
+    pygame.draw.rect(surface, (50, 55, 70), lobby_area, width=2, border_radius=12)
+    
+    font_section = get_font(18, bold=True)
+    sec_surf = font_section.render("房間成員列表", True, (180, 180, 200))
+    surface.blit(sec_surf, (180, 155))
+    
+    # 支援最多 4 個插槽動態顯示
+    max_visible_slots = 4
+    for idx in range(max_visible_slots):
+        slot_rect = pygame.Rect(180, 195 + idx * 80, 320, 70)
+        pygame.draw.rect(surface, (30, 32, 40), slot_rect, border_radius=8)
+        pygame.draw.rect(surface, (60, 65, 80), slot_rect, width=1, border_radius=8)
+        
+        if idx < len(net_manager.room_players):
+            player_info = net_manager.room_players[idx]
+            p_name = player_info["name"]
+            is_bot = player_info.get("is_bot", False)
+            is_room_host = (p_name == net_manager.room_host)
+            
+            font_name = get_font(18, bold=True)
+            name_color = (255, 215, 0) if is_room_host else (240, 240, 250)
+            
+            disp_name = p_name
+            if is_bot:
+                disp_name += " (虛擬 AI)"
+                
+            name_surf = font_name.render(disp_name, True, name_color)
+            surface.blit(name_surf, (slot_rect.x + 20, slot_rect.y + 12))
+            
+            font_role = get_font(12)
+            role_str = "【房主】👑" if is_room_host else "【挑戰者】"
+            if is_bot:
+                role_str = "【陪玩機器人】🤖"
+            role_surf = font_role.render(role_str, True, (150, 150, 170))
+            surface.blit(role_surf, (slot_rect.x + 20, slot_rect.y + 40))
+        else:
+            font_empty = get_font(14)
+            empty_surf = font_empty.render("等待玩家加入...", True, (80, 80, 90))
+            surface.blit(empty_surf, (slot_rect.x + 20, slot_rect.y + 25))
+            
+    is_me_host = (net_manager.player_name == net_manager.room_host)
+    total_players = len(net_manager.room_players)
+    
+    # 2.1 新增機器人按鈕 (限房主且人數未滿上限)
+    # E-Card 上限為 2，RPS 上限為 4
+    bot_limit = 4 if net_manager.game_type == "rps" else 2
+    bot_enabled = is_me_host and (total_players < bot_limit)
+    bot_hover = room_add_bot_rect.collidepoint(mouse_pos) and bot_enabled
+    bot_bg = (40, 90, 150) if bot_enabled else (35, 40, 45)
+    bot_hover_bg = (50, 110, 180) if bot_enabled else (35, 40, 45)
+    bot_txt = (240, 240, 250) if bot_enabled else (110, 115, 120)
+    draw_button(surface, room_add_bot_rect, "新增機器人 (Add Bot)", bot_bg, bot_hover_bg, bot_txt, bot_hover, get_font(15, bold=True))
+    
+    # 2.1.2 移除機器人按鈕 (限房主且房間內有機器人)
+    has_bots = any(p.get("is_bot", False) for p in net_manager.room_players)
+    remove_bot_enabled = is_me_host and has_bots
+    remove_bot_hover = room_remove_bot_rect.collidepoint(mouse_pos) and remove_bot_enabled
+    remove_bot_bg = (150, 90, 40) if remove_bot_enabled else (35, 40, 45)
+    remove_bot_hover_bg = (180, 110, 50) if remove_bot_enabled else (35, 40, 45)
+    remove_bot_txt = (240, 240, 250) if remove_bot_enabled else (110, 115, 120)
+    draw_button(surface, room_remove_bot_rect, "刪除機器人 (Remove Bot)", remove_bot_bg, remove_bot_hover_bg, remove_bot_txt, remove_bot_hover, get_font(15, bold=True))
+    
+    # 2.2 開始遊戲按鈕 (RPS 至少需要 2 人，E-Card 必須剛好 2 人)
+    if net_manager.game_type == "rps":
+        start_enabled = is_me_host and (total_players >= 2)
+    else:
+        start_enabled = is_me_host and (total_players == 2)
+        
+    start_hover = room_start_game_rect.collidepoint(mouse_pos) and start_enabled
+    start_bg = (20, 140, 80) if start_enabled else (35, 40, 45)
+    start_hover_bg = (30, 180, 100) if start_enabled else (35, 40, 45)
+    start_txt = (240, 240, 250) if start_enabled else (110, 115, 120)
+    draw_button(surface, room_start_game_rect, "開始遊戲對決 (Start)", start_bg, start_hover_bg, start_txt, start_hover, get_font(15, bold=True))
+    
+    if not is_me_host:
+        font_tip = get_font(16)
+        tip_surf = font_tip.render("請等待房主開始遊戲...", True, (200, 200, 100))
+        surface.blit(tip_surf, (540, 230))
+    
+    leave_hover = room_leave_rect.collidepoint(mouse_pos)
+    draw_button(surface, room_leave_rect, "退出房間 (Leave)", (120, 40, 40), (160, 50, 50), (250, 240, 240), leave_hover, get_font(15, bold=True))
+
 def draw_game_scene(surface, mouse_pos):
-    """主渲染派發器：選擇渲染大廳"""
     if game.game_phase == LOBBY:
         draw_lobby_scene(surface, mouse_pos)
+    elif game.game_phase == ROOM_LOBBY:
+        draw_room_lobby_scene(surface, mouse_pos)
+
 
 # ==========================================
 # 主程式執行迴圈 (Event Loop Entry)
@@ -251,8 +351,46 @@ def main():
     pygame.display.set_caption("E-Game Center 遊戲娛樂大廳")
     clock = pygame.time.Clock()
     
-    # 預設啟動先進入遊戲大廳
     game.game_phase = LOBBY
+    
+    # 房間大廳非同步事件掛鉤
+    def on_lobby_net_receive(data):
+        global ecard_game_instance, rps_game_instance, connection_status_msg, connection_status_color
+        action = data.get("action")
+        
+        if action == "ROOM_INFO_UPDATE":
+            if game.game_phase == LOBBY:
+                game.game_phase = ROOM_LOBBY
+                connection_status_msg = "已進入大廳房間"
+                connection_status_color = (100, 255, 100)
+                
+        elif action == "GAME_START":
+            # 遊戲啟動，跳轉進入遊戲對局畫面
+            opps = data.get("opponents", [])
+            opp_name = data.get("opponent_name", "對手")
+            if opps:
+                net_manager.opponent_name = opps[0]
+            else:
+                net_manager.opponent_name = opp_name
+                
+            print(f"[Lobby] Received GAME_START. Opponents list: {opps or opp_name}")
+            
+            game.wins_player = 0
+            game.wins_cpu = 0
+            
+            if net_manager.game_type == "rps":
+                game.game_phase = RPS_GAME
+                # 多人模式下皆連線中央伺服器，is_offline 為 False
+                rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game, net_manager, is_offline=False)
+            else:
+                game.game_phase = 0
+                ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
+                
+        elif action == "error":
+            connection_status_msg = data.get("message", "連線錯誤")
+            connection_status_color = (255, 100, 100)
+
+    net_manager.on_receive_message = on_lobby_net_receive
     
     running = True
     while running:
@@ -262,16 +400,15 @@ def main():
         # 全域輪詢網路通訊
         net_manager.poll()
         
-        # 主機開房連線完成後，自動跳轉進入遊戲介面
-        if connection_mode == "HOST" and is_waiting_connection and net_manager.is_connected:
-            is_waiting_connection = False
-            if getattr(net_manager, "game_type", "ecard") == "rps":
-                game.game_phase = RPS_GAME
-                rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game, net_manager, is_offline=False)
-            else:
-                ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
-            connection_status_msg = "對手已連入！遊戲啟動中。"
-            connection_status_color = (100, 255, 100)
+        # 斷線後自動安全跳回首頁
+        if not net_manager.is_connected and connection_mode != "OFFLINE" and game.game_phase == ROOM_LOBBY:
+            game.game_phase = LOBBY
+            connection_status_msg = "連線已中斷，大廳已解散"
+            connection_status_color = (255, 100, 100)
+            
+        # 若回到大廳，自動重設 Lobby 訊息接收處理器
+        if game.game_phase == LOBBY and net_manager.on_receive_message != on_lobby_net_receive:
+            net_manager.on_receive_message = on_lobby_net_receive
             
         # 偵測輸入事件
         for event in pygame.event.get():
@@ -291,13 +428,10 @@ def main():
                 # 大廳狀態下的點擊偵測
                 # ------------------------------------------
                 if game.game_phase == LOBBY:
-                    # 點擊 IP 輸入框 (僅在 CLIENT 模式下啟用)
                     if ip_input_rect.collidepoint(mouse_pos) and connection_mode == "CLIENT":
                         active_input_field = "IP"
-                    # 點擊 Port 輸入框 (非離線模式下啟用)
                     elif port_input_rect.collidepoint(mouse_pos) and connection_mode != "OFFLINE":
                         active_input_field = "PORT"
-                    # 點擊 名字 輸入框 (任何模式皆可點選)
                     elif name_input_rect.collidepoint(mouse_pos):
                         active_input_field = "NAME"
                     else:
@@ -310,11 +444,11 @@ def main():
                         
                         if connection_mode == "OFFLINE":
                             connection_mode = "HOST"
-                            connection_status_msg = "切換為開房模式，啟動遊戲時將啟動本機伺服器等待連線"
+                            connection_status_msg = "切換為大廳房主模式，啟動時背景將自動開啟中央伺服器"
                             connection_status_color = (200, 200, 100)
                         elif connection_mode == "HOST":
                             connection_mode = "CLIENT"
-                            connection_status_msg = "切換為聯機模式，啟動遊戲時將連線至指定主機 IP"
+                            connection_status_msg = "切換為大廳客機模式，啟動時將連線加入對方大廳"
                             connection_status_color = (200, 200, 100)
                         else:
                             connection_mode = "OFFLINE"
@@ -327,65 +461,82 @@ def main():
                         
                     # 點擊啟動「國王與奴隸」遊戲
                     elif game_ecard_rect.collidepoint(mouse_pos):
-                        # 同步玩家名字到 net_manager 供連線層調用
                         net_manager.player_name = player_name
+                        net_manager.game_type = "ecard"
                         if connection_mode == "OFFLINE":
-                            # 進入離線模式 E-Card
                             ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=True)
                         elif connection_mode == "HOST":
-                            # 網路連線模式下 - Host 開房監聽
-                            connection_status_msg = "開房監聽中，等待對手連入..."
+                            connection_status_msg = "正在建立並連線本地中央伺服器..."
                             connection_status_color = (200, 200, 100)
-                            net_manager.game_type = "ecard"
                             success, msg = net_manager.host(server_port)
-                            if success:
-                                is_waiting_connection = True
-                            else:
+                            if not success:
                                 connection_status_msg = f"開房失敗: {msg}"
                                 connection_status_color = (255, 100, 100)
                         elif connection_mode == "CLIENT":
-                            # 網路連線模式下 - Client 連線
-                            connection_status_msg = "嘗試與主機連線中..."
+                            connection_status_msg = "正在連線加入房主的中央伺服器..."
                             connection_status_color = (200, 200, 100)
-                            net_manager.game_type = "ecard"
                             success, msg = net_manager.connect(server_ip, server_port)
-                            if success:
-                                ecard_game_instance = ecard_ui.EcardGameUI(screen, game, net_manager, is_offline=False)
-                            else:
-                                connection_status_msg = f"連線失敗: {msg}"
+                            if not success:
+                                connection_status_msg = f"連線加入失敗: {msg}"
                                 connection_status_color = (255, 100, 100)
                                 
                     # 點擊啟動「限定剪刀石頭布」遊戲
                     elif game_locked_rect.collidepoint(mouse_pos):
                         net_manager.player_name = player_name
+                        net_manager.game_type = "rps"
                         if connection_mode == "OFFLINE":
                             game.game_phase = RPS_GAME
                             rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game, net_manager, is_offline=True)
                         elif connection_mode == "HOST":
-                            connection_status_msg = "開房監聽中，等待對手連入..."
+                            connection_status_msg = "正在建立並連線本地中央伺服器..."
                             connection_status_color = (200, 200, 100)
-                            net_manager.game_type = "rps"
                             success, msg = net_manager.host(server_port)
-                            if success:
-                                is_waiting_connection = True
-                            else:
+                            if not success:
                                 connection_status_msg = f"開房失敗: {msg}"
                                 connection_status_color = (255, 100, 100)
                         elif connection_mode == "CLIENT":
-                            connection_status_msg = "嘗試與主機連線中..."
+                            connection_status_msg = "正在連線加入房主的中央伺服器..."
                             connection_status_color = (200, 200, 100)
-                            net_manager.game_type = "rps"
                             success, msg = net_manager.connect(server_ip, server_port)
-                            if success:
-                                game.game_phase = RPS_GAME
-                                rps_game_instance = restricted_rps_game.RestrictedRPSGame(screen, game, net_manager, is_offline=False)
-                            else:
-                                connection_status_msg = f"連線失敗: {msg}"
+                            if not success:
+                                connection_status_msg = f"連線加入失敗: {msg}"
                                 connection_status_color = (255, 100, 100)
                                 
                     # 點擊離開程式
                     elif exit_btn_rect.collidepoint(mouse_pos):
                         running = False
+                        
+                # ------------------------------------------
+                # 房間大廳 (ROOM_LOBBY) 狀態下的點擊偵測
+                # ------------------------------------------
+                elif game.game_phase == ROOM_LOBBY:
+                    is_me_host = (net_manager.player_name == net_manager.room_host)
+                    total_players = len(net_manager.room_players)
+                    
+                    # 房主新增機器人
+                    bot_limit = 4 if net_manager.game_type == "rps" else 2
+                    if room_add_bot_rect.collidepoint(mouse_pos) and is_me_host and total_players < bot_limit:
+                        net_manager.send_data({"action": "ADD_BOT"})
+                        
+                    # 房主移除機器人
+                    elif room_remove_bot_rect.collidepoint(mouse_pos) and is_me_host and any(p.get("is_bot", False) for p in net_manager.room_players):
+                        net_manager.send_data({"action": "REMOVE_BOT"})
+                        
+                    # 房主啟動遊戲 (直接送出 START_GAME_REQ 到中央伺服器)
+                    elif room_start_game_rect.collidepoint(mouse_pos):
+                        if net_manager.game_type == "rps":
+                            click_start_enabled = is_me_host and (total_players >= 2)
+                        else:
+                            click_start_enabled = is_me_host and (total_players == 2)
+                        if click_start_enabled:
+                            net_manager.send_data({"action": "START_GAME_REQ"})
+                        
+                    # 退出房間
+                    elif room_leave_rect.collidepoint(mouse_pos):
+                        net_manager.disconnect()
+                        game.game_phase = LOBBY
+                        connection_status_msg = "已離開房間並中斷連線"
+                        connection_status_color = (150, 150, 160)
                 
             # 大廳設定文字輸入處理
             elif event.type == pygame.KEYDOWN:
@@ -403,15 +554,12 @@ def main():
                         char = event.unicode
                         if char and char.isprintable():
                             if active_input_field == "IP":
-                                # 限制 IP 長度為 15
                                 if len(server_ip) < 15:
                                     server_ip += char
                             elif active_input_field == "PORT":
-                                # 限制 Port 長度為 5 且限為數字
                                 if len(server_port) < 5 and char.isdigit():
                                     server_port += char
                             elif active_input_field == "NAME":
-                                # 限制名字長度為 12
                                 if len(player_name) < 12:
                                     player_name += char
                                     
@@ -423,18 +571,15 @@ def main():
             ecard_game_instance.update(dt, mouse_pos)
             ecard_game_instance.draw(screen, mouse_pos)
         else:
-            # 大廳狀態下釋放子遊戲實例，釋放記憶體並重置狀態
             if rps_game_instance is not None:
                 rps_game_instance.cleanup()
             ecard_game_instance = None
             rps_game_instance = None
             
-            # 渲染大廳
             draw_game_scene(screen, mouse_pos)
         
         pygame.display.flip()
         
-    # 安全斷開網路並關閉視窗
     net_manager.disconnect()
     pygame.quit()
     sys.exit()

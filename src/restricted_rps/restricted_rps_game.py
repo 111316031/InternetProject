@@ -78,6 +78,19 @@ class RestrictedRPSGame:
         # 玩家座標與速度
         self.player_x = 800.0
         self.player_y = 1000.0
+        
+        # 多人聯機對手字典
+        self.other_players = {}
+        if self.net_manager and not self.is_offline:
+            for p in self.net_manager.room_players:
+                name = p["name"]
+                if name != self.player_name and not p.get("is_bot", False):
+                    self.other_players[name] = {
+                        "x": 800.0,
+                        "y": 600.0,
+                        "stars": 3,
+                        "cards_count": 12
+                    }
         self.player_speed = 220.0
         
         # 相機座標
@@ -169,8 +182,21 @@ class RestrictedRPSGame:
     def _get_interactable_opponent(self):
         if self.is_offline:
             return False
-        dist = math.hypot(self.player_x - self.opponent_x, self.player_y - self.opponent_y)
-        if dist < 65:
+        nearest_opp = None
+        min_dist = 65.0
+        for opp_name, opp_info in self.other_players.items():
+            opp_x = opp_info.get("x", 800.0)
+            opp_y = opp_info.get("y", 600.0)
+            dist = math.hypot(self.player_x - opp_x, self.player_y - opp_y)
+            if dist < min_dist:
+                min_dist = dist
+                nearest_opp = opp_name
+        if nearest_opp:
+            # 暫存為主要互動對手
+            self.opponent_name = nearest_opp
+            self.opponent_x = self.other_players[nearest_opp]["x"]
+            self.opponent_y = self.other_players[nearest_opp]["y"]
+            self.opponent_stars = self.other_players[nearest_opp]["stars"]
             return True
         return False
 
@@ -180,23 +206,38 @@ class RestrictedRPSGame:
         self.sent_request = req_type
         self.net_manager.send_data({
             "action": "interact_req",
+            "sender": self.player_name,
+            "target": self.opponent_name,
             "type": req_type
         })
         self.add_log(f"已向 {self.opponent_name} 發送 {req_type} 邀請...")
 
     def on_net_receive(self, data):
         action = data.get("action")
+        sender = data.get("sender")
         
         if action == "sync_names":
             self.opponent_name = data.get("player_name", self.opponent_name)
             
         elif action == "sync_pos":
-            self.opponent_x = data.get("x", self.opponent_x)
-            self.opponent_y = data.get("y", self.opponent_y)
+            if sender and sender != self.player_name:
+                if sender not in self.other_players:
+                    self.other_players[sender] = {}
+                self.other_players[sender]["x"] = data.get("x", 800.0)
+                self.other_players[sender]["y"] = data.get("y", 600.0)
+                self.other_players[sender]["stars"] = data.get("stars", 3)
+                self.other_players[sender]["cards_count"] = data.get("cards_count", 15)
+                
+                # 為了向下相容，將最新移動的玩家暫存為主要對手
+                self.opponent_name = sender
+                self.opponent_x = self.other_players[sender]["x"]
+                self.opponent_y = self.other_players[sender]["y"]
+                self.opponent_stars = self.other_players[sender]["stars"]
             
         elif action == "interact_req":
             req_type = data.get("type")
-            self.pending_request = {"type": req_type, "sender": self.opponent_name}
+            self.pending_request = {"type": req_type, "sender": sender}
+            self.opponent_name = sender
             
         elif action == "interact_resp":
             req_type = data.get("type")
@@ -204,13 +245,21 @@ class RestrictedRPSGame:
             if self.sent_request == req_type:
                 self.sent_request = None
                 if accepted:
-                    self.add_log(f"{self.opponent_name} 接受了您的邀請！")
+                    self.opponent_name = sender
+                    if sender in self.other_players:
+                        self.opponent_stars = self.other_players[sender]["stars"]
+                        self.opponent_cards = {
+                            "rock": self.other_players[sender]["cards_count"] // 3,
+                            "paper": self.other_players[sender]["cards_count"] // 3,
+                            "scissors": self.other_players[sender]["cards_count"] // 3
+                        }
+                    self.add_log(f"{sender} 接受了您的邀請！")
                     if req_type == "battle":
                         self._start_battle_mode()
                     elif req_type == "trade":
                         self._start_trade_mode()
                 else:
-                    self.add_log(f"{self.opponent_name} 拒絕了您的邀請。")
+                    self.add_log(f"{sender} 拒絕了您的邀請。")
                     
         elif action == "play_card":
             self.opponent_selected_card = data.get("card_type")
@@ -444,10 +493,13 @@ class RestrictedRPSGame:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 處理連線邀請點擊
             if self.pending_request:
+                target_player = self.pending_request["sender"]
                 if "btn_req_accept" in self.btn_rects and self.btn_rects["btn_req_accept"].collidepoint(mouse_pos):
                     req_type = self.pending_request["type"]
                     self.net_manager.send_data({
                         "action": "interact_resp",
+                        "sender": self.player_name,
+                        "target": target_player,
                         "type": req_type,
                         "accepted": True
                     })
@@ -461,6 +513,8 @@ class RestrictedRPSGame:
                     req_type = self.pending_request["type"]
                     self.net_manager.send_data({
                         "action": "interact_resp",
+                        "sender": self.player_name,
+                        "target": target_player,
                         "type": req_type,
                         "accepted": False
                     })
@@ -499,10 +553,13 @@ class RestrictedRPSGame:
 
         elif event.type == pygame.KEYDOWN:
             if self.pending_request:
+                target_player = self.pending_request["sender"]
                 if event.key == pygame.K_y:
                     req_type = self.pending_request["type"]
                     self.net_manager.send_data({
                         "action": "interact_resp",
+                        "sender": self.player_name,
+                        "target": target_player,
                         "type": req_type,
                         "accepted": True
                     })
@@ -516,6 +573,8 @@ class RestrictedRPSGame:
                     req_type = self.pending_request["type"]
                     self.net_manager.send_data({
                         "action": "interact_resp",
+                        "sender": self.player_name,
+                        "target": target_player,
                         "type": req_type,
                         "accepted": False
                     })
@@ -579,7 +638,9 @@ class RestrictedRPSGame:
             if "btn_trade_cancel" in self.btn_rects and self.btn_rects["btn_trade_cancel"].collidepoint(mouse_pos):
                 if not self.is_offline:
                     self.net_manager.send_data({
-                        "action": "cancel_trade"
+                        "action": "cancel_trade",
+                        "sender": self.player_name,
+                        "target": self.opponent_name
                     })
                 self.state = RPG_WALK
                 return
@@ -616,6 +677,8 @@ class RestrictedRPSGame:
                 if self.trade_offer != old_offer:
                     self.net_manager.send_data({
                         "action": "sync_trade",
+                        "sender": self.player_name,
+                        "target": self.opponent_name,
                         "offer": self.trade_offer
                     })
                     self.trade_self_ready = False
@@ -626,7 +689,9 @@ class RestrictedRPSGame:
                 if "btn_trade_confirm" in self.btn_rects and self.btn_rects["btn_trade_confirm"].collidepoint(mouse_pos):
                     self.trade_self_ready = True
                     self.net_manager.send_data({
-                        "action": "confirm_trade"
+                        "action": "confirm_trade",
+                        "sender": self.player_name,
+                        "target": self.opponent_name
                     })
                     self.trade_message = "已確認提案，等待對手確認..."
                     self.trade_msg_color = (100, 200, 100)
@@ -651,6 +716,8 @@ class RestrictedRPSGame:
                             self.battle_phase = "waiting"
                             self.net_manager.send_data({
                                 "action": "play_card",
+                                "sender": self.player_name,
+                                "target": self.opponent_name,
                                 "card_type": self.player_selected_card
                             })
                             if self.opponent_selected_card:
@@ -947,8 +1014,11 @@ class RestrictedRPSGame:
             if not hasattr(self, "last_sent_x") or not hasattr(self, "last_sent_y") or abs(self.player_x - self.last_sent_x) > 1.0 or abs(self.player_y - self.last_sent_y) > 1.0:
                 self.net_manager.send_data({
                     "action": "sync_pos",
+                    "sender": self.player_name,
                     "x": self.player_x,
-                    "y": self.player_y
+                    "y": self.player_y,
+                    "stars": self.player_stars,
+                    "cards_count": len(self.player_cards)
                 })
                 self.last_sent_x = self.player_x
                 self.last_sent_y = self.player_y
@@ -1201,33 +1271,38 @@ class RestrictedRPSGame:
 
         # 4. 繪製對手玩家 (如果不是離線模式)
         if not self.is_offline:
-            opp_scr_x = int(self.opponent_x - self.camera_x)
-            opp_scr_y = int(self.opponent_y - self.camera_y)
-            
-            # 判斷滑鼠是否懸停於對手
-            dist_mouse = math.hypot(mouse_pos[0] - opp_scr_x, mouse_pos[1] - opp_scr_y)
-            opp_hovered = (dist_mouse < CHAR_RADIUS + 5)
-            
-            # 靠近時亮起互動提示圈
-            dist_player = math.hypot(self.opponent_x - self.player_x, self.opponent_y - self.player_y)
-            is_near_opp = (dist_player < 65)
-            
-            if is_near_opp:
-                pygame.draw.circle(surface, (100, 255, 100), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 8, width=1)
+            for opp_name, opp_info in self.other_players.items():
+                opp_x = opp_info.get("x", 800.0)
+                opp_y = opp_info.get("y", 600.0)
+                opp_stars = opp_info.get("stars", 3)
                 
-            if opp_hovered:
-                pygame.draw.circle(surface, (255, 255, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 4, width=2)
+                opp_scr_x = int(opp_x - self.camera_x)
+                opp_scr_y = int(opp_y - self.camera_y)
                 
-            # 本體
-            pygame.draw.circle(surface, (100, 180, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS)
-            pygame.draw.circle(surface, (10, 10, 15), (opp_scr_x, opp_scr_y), CHAR_RADIUS, width=1)
-            
-            # 名字與星星
-            lbl_opp = get_font(12, bold=True).render(self.opponent_name, True, (100, 180, 255))
-            surface.blit(lbl_opp, lbl_opp.get_rect(center=(opp_scr_x, opp_scr_y - CHAR_RADIUS - 12)))
-            
-            lbl_opp_st = get_font(10).render(f"⭐ {self.opponent_stars}", True, (245, 220, 90))
-            surface.blit(lbl_opp_st, lbl_opp_st.get_rect(center=(opp_scr_x, opp_scr_y + CHAR_RADIUS + 12)))
+                # 判斷滑鼠是否懸停於對手
+                dist_mouse = math.hypot(mouse_pos[0] - opp_scr_x, mouse_pos[1] - opp_scr_y)
+                opp_hovered = (dist_mouse < CHAR_RADIUS + 5)
+                
+                # 靠近時亮起互動提示圈
+                dist_player = math.hypot(opp_x - self.player_x, opp_y - self.player_y)
+                is_near_opp = (dist_player < 65)
+                
+                if is_near_opp:
+                    pygame.draw.circle(surface, (100, 255, 100), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 8, width=1)
+                    
+                if opp_hovered:
+                    pygame.draw.circle(surface, (255, 255, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 4, width=2)
+                    
+                # 本體
+                pygame.draw.circle(surface, (100, 180, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS)
+                pygame.draw.circle(surface, (10, 10, 15), (opp_scr_x, opp_scr_y), CHAR_RADIUS, width=1)
+                
+                # 名字與星星
+                lbl_opp = get_font(12, bold=True).render(opp_name, True, (100, 180, 255))
+                surface.blit(lbl_opp, lbl_opp.get_rect(center=(opp_scr_x, opp_scr_y - CHAR_RADIUS - 12)))
+                
+                lbl_opp_st = get_font(10).render(f"⭐ {opp_stars}", True, (245, 220, 90))
+                surface.blit(lbl_opp_st, lbl_opp_st.get_rect(center=(opp_scr_x, opp_scr_y + CHAR_RADIUS + 12)))
 
         # 5. 繪製玩家主角
         p_scr_x = int(self.player_x - self.camera_x)
