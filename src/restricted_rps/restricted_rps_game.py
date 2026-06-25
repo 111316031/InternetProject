@@ -407,6 +407,16 @@ class RestrictedRPSGame:
                     npc["cards"] = data.get("cards", npc["cards"])
                     break
                     
+        elif action == "game_over":
+            if not self.is_spectator and self.player_stars > 0 and sum(self.player_cards.values()) > 0:
+                self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
+                self.add_log(f"[出局] {self.player_name}手牌未出完，被黑衣人抓走了！")
+            self.state = FINAL_SUMMARY
+            for npc in self.npcs:
+                if npc["status"] == "WANDERING":
+                    npc["status"] = "LOSE"
+                    npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
+                    
         elif action == "broadcast_log":
             msg = data.get("message")
             if msg:
@@ -1456,6 +1466,14 @@ class RestrictedRPSGame:
                                 self.add_log(f"[出局] {opp_name}手牌未出完，被黑衣人抓走了！")
                                 opp_info["logged_lose"] = True
                                 opp_info["cards_count"] = 0
+                                
+                # 廣播結束消息 (僅 Host 發送)
+                if is_host and not self.is_offline and self.net_manager:
+                    self.net_manager.send_data({
+                        "action": "game_over",
+                        "sender": self.player_name,
+                        "sender_id": getattr(self.net_manager, "player_id", None)
+                    })
                 self.state = FINAL_SUMMARY
 
     def _simulate_npc_clash_log(self):
