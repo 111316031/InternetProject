@@ -689,13 +689,11 @@ class RestrictedRPSGame:
                 self._adjust_trade("give_rock", 1, self.player_cards["rock"], mouse_pos)
                 self._adjust_trade("give_paper", 1, self.player_cards["paper"], mouse_pos)
                 self._adjust_trade("give_scissors", 1, self.player_cards["scissors"], mouse_pos)
-                self._adjust_trade("give_star", 1, self.player_stars - 1, mouse_pos)  # 保留至少一顆星，防自殺
                 
                 # 調節對方提供的物件 (want)
                 self._adjust_trade("want_rock", 1, self.active_npc["cards"]["rock"], mouse_pos)
                 self._adjust_trade("want_paper", 1, self.active_npc["cards"]["paper"], mouse_pos)
                 self._adjust_trade("want_scissors", 1, self.active_npc["cards"]["scissors"], mouse_pos)
-                self._adjust_trade("want_star", 1, self.active_npc["stars"] - 1, mouse_pos)
                 
                 # 點擊確認發起交易
                 if "btn_trade_confirm" in self.btn_rects and self.btn_rects["btn_trade_confirm"].collidepoint(mouse_pos):
@@ -706,12 +704,10 @@ class RestrictedRPSGame:
                 self._adjust_trade("give_rock", 1, self.player_cards["rock"], mouse_pos)
                 self._adjust_trade("give_paper", 1, self.player_cards["paper"], mouse_pos)
                 self._adjust_trade("give_scissors", 1, self.player_cards["scissors"], mouse_pos)
-                self._adjust_trade("give_star", 1, self.player_stars - 1, mouse_pos)
                 
                 self._adjust_trade("want_rock", 1, self.opponent_cards["rock"], mouse_pos)
                 self._adjust_trade("want_paper", 1, self.opponent_cards["paper"], mouse_pos)
                 self._adjust_trade("want_scissors", 1, self.opponent_cards["scissors"], mouse_pos)
-                self._adjust_trade("want_star", 1, self.opponent_stars - 1, mouse_pos)
                 
                 if self.trade_offer != old_offer:
                     self.net_manager.send_data({
@@ -722,7 +718,7 @@ class RestrictedRPSGame:
                     })
                     self.trade_self_ready = False
                     self.trade_opp_ready = False
-                    self.trade_message = "請在下方調整交易的卡牌或星星數量。"
+                    self.trade_message = "請在下方調整交易的卡牌數量。"
                     self.trade_msg_color = (180, 180, 190)
                     
                 if "btn_trade_confirm" in self.btn_rects and self.btn_rects["btn_trade_confirm"].collidepoint(mouse_pos):
@@ -818,7 +814,7 @@ class RestrictedRPSGame:
             "give_rock": 0, "give_paper": 0, "give_scissors": 0, "give_star": 0,
             "want_rock": 0, "want_paper": 0, "want_scissors": 0, "want_star": 0
         }
-        self.trade_message = "請在下方調整交易的卡牌或星星數量。"
+        self.trade_message = "請在下方調整交易的卡牌數量。"
         self.trade_msg_color = (180, 180, 190)
 
     def _adjust_trade(self, field, value, max_limit, mouse_pos):
@@ -1561,7 +1557,7 @@ class RestrictedRPSGame:
         info_s = get_font(13).render(self.trade_message, True, self.trade_msg_color)
         surface.blit(info_s, info_s.get_rect(center=(500, 100)))
         
-        card_types = ["rock", "paper", "scissors", "star"]
+        card_types = ["rock", "paper", "scissors"]
         y_start = 170
         y_spacing = 65
         
