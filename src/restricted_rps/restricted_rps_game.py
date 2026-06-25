@@ -288,6 +288,7 @@ class RestrictedRPSGame:
                 self.other_players[opp_key]["stars"] = new_stars
                 self.other_players[opp_key]["cards_count"] = new_cards_count
                 self.other_players[opp_key]["name"] = sender
+                self.other_players[opp_key]["is_spectator"] = data.get("is_spectator", False)
                 
                 # Check elimination of remote player
                 if old_stars > 0 and (new_stars <= 0 or (new_cards_count == 0 and new_stars < 3)):
@@ -304,7 +305,7 @@ class RestrictedRPSGame:
                 self.opponent_stars = self.other_players[opp_key]["stars"]
             
         elif action == "interact_req":
-            if self.is_spectator or self.player_stars <= 0:
+            if not self.is_spectator and self.player_stars <= 0:
                 self.net_manager.send_data({
                     "action": "interact_resp",
                     "sender": self.player_name,
@@ -619,23 +620,20 @@ class RestrictedRPSGame:
                 self.game_manager.game_phase = -1  # LOBBY
 
     def _handle_rpg_events(self, event, mouse_pos):
-        if self.is_spectator:
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
-                    if not self.is_offline and self.net_manager:
-                        self.net_manager.disconnect()
-                    self.cleanup()
-                    self.game_manager.game_phase = -1  # LOBBY
-                    return
-                if "btn_toggle_logs" in self.btn_rects and self.btn_rects["btn_toggle_logs"].collidepoint(mouse_pos):
-                    self.show_logs = not self.show_logs
-                    return
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_l:
-                    self.show_logs = not self.show_logs
-            return
-
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # 點擊頭部返回大廳按鈕
+            if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.disconnect()
+                self.cleanup()
+                self.game_manager.game_phase = -1  # LOBBY
+                return
+                
+            # 點擊日誌切換按鈕
+            if "btn_toggle_logs" in self.btn_rects and self.btn_rects["btn_toggle_logs"].collidepoint(mouse_pos):
+                self.show_logs = not self.show_logs
+                return
+
             # 處理連線邀請點擊
             if self.pending_request:
                 target_id = self.pending_request["sender_id"]
@@ -649,6 +647,14 @@ class RestrictedRPSGame:
                         "type": req_type,
                         "accepted": True
                     })
+                    self.opponent_id = target_id
+                    if self.opponent_id in self.other_players:
+                        self.opponent_stars = self.other_players[self.opponent_id]["stars"]
+                        self.opponent_cards = {
+                            "rock": self.other_players[self.opponent_id]["cards_count"] // 3,
+                            "paper": self.other_players[self.opponent_id]["cards_count"] // 3,
+                            "scissors": self.other_players[self.opponent_id]["cards_count"] // 3
+                        }
                     self.pending_request = None
                     if req_type == "battle":
                         self._start_battle_mode()
@@ -668,48 +674,46 @@ class RestrictedRPSGame:
                     self.pending_request = None
                     return
 
-            # 點擊頭部返回大廳按鈕
-            if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
-                if not self.is_offline and self.net_manager:
-                    self.net_manager.disconnect()
-                self.cleanup()
-                self.game_manager.game_phase = -1  # LOBBY
-                return
-                
-            # 點擊日誌切換按鈕
-            if "btn_toggle_logs" in self.btn_rects and self.btn_rects["btn_toggle_logs"].collidepoint(mouse_pos):
-                self.show_logs = not self.show_logs
-                return
-            
-            # 滑鼠點擊靠近的 NPC 也可以觸發選單
-            for npc in self.npcs:
-                if npc["status"] in ("SAFE", "LOSE"):
-                    continue
-                # 計算與玩家距離
-                dist = math.hypot(npc["x"] - self.player_x, npc["y"] - self.player_y)
-                if dist < 65:  # 當靠近且點擊 NPC 時
-                    # 換算畫面點擊點
-                    screen_npc_x = npc["x"] - self.camera_x
-                    screen_npc_y = npc["y"] - self.camera_y
-                    click_dist = math.hypot(mouse_pos[0] - screen_npc_x, mouse_pos[1] - screen_npc_y)
-                    if click_dist < CHAR_RADIUS + 10:
-                        self.active_npc = npc
-                        self.state = DIALOGUE
-                        self.dialogue_index = 0
-                        break
+            # 滑鼠點擊靠近的 NPC 也可以觸發選單 (限非幽靈玩家)
+            if not self.is_spectator:
+                for npc in self.npcs:
+                    if npc["status"] in ("SAFE", "LOSE"):
+                        continue
+                    # 計算與玩家距離
+                    dist = math.hypot(npc["x"] - self.player_x, npc["y"] - self.player_y)
+                    if dist < 65:  # 當靠近且點擊 NPC 時
+                        # 換算畫面點擊點
+                        screen_npc_x = npc["x"] - self.camera_x
+                        screen_npc_y = npc["y"] - self.camera_y
+                        click_dist = math.hypot(mouse_pos[0] - screen_npc_x, mouse_pos[1] - screen_npc_y)
+                        if click_dist < CHAR_RADIUS + 10:
+                            self.active_npc = npc
+                            self.state = DIALOGUE
+                            self.dialogue_index = 0
+                            break
 
         elif event.type == pygame.KEYDOWN:
             if self.pending_request:
                 target_player = self.pending_request["sender"]
+                target_id = self.pending_request["sender_id"]
                 if event.key == pygame.K_y:
                     req_type = self.pending_request["type"]
                     self.net_manager.send_data({
                         "action": "interact_resp",
                         "sender": self.player_name,
-                        "target": target_player,
+                        "sender_id": getattr(self.net_manager, "player_id", None),
+                        "target": target_id,
                         "type": req_type,
                         "accepted": True
                     })
+                    self.opponent_id = target_id
+                    if self.opponent_id in self.other_players:
+                        self.opponent_stars = self.other_players[self.opponent_id]["stars"]
+                        self.opponent_cards = {
+                            "rock": self.other_players[self.opponent_id]["cards_count"] // 3,
+                            "paper": self.other_players[self.opponent_id]["cards_count"] // 3,
+                            "scissors": self.other_players[self.opponent_id]["cards_count"] // 3
+                        }
                     self.pending_request = None
                     if req_type == "battle":
                         self._start_battle_mode()
@@ -721,7 +725,8 @@ class RestrictedRPSGame:
                     self.net_manager.send_data({
                         "action": "interact_resp",
                         "sender": self.player_name,
-                        "target": target_player,
+                        "sender_id": getattr(self.net_manager, "player_id", None),
+                        "target": target_id,
                         "type": req_type,
                         "accepted": False
                     })
@@ -733,8 +738,8 @@ class RestrictedRPSGame:
                 self.show_logs = not self.show_logs
                 return
                 
-            # 吧檯喝酒互動
-            if self._get_distance_to_bar() < 65:
+            # 吧檯喝酒互動 (限非幽靈玩家)
+            if not self.is_spectator and self._get_distance_to_bar() < 65:
                 if event.key == pygame.K_SPACE:
                     self.drink_count += 1
                     drunk_status = ["", "移速提升 1.5 倍！", "移速提升 2.0 倍！", "視線開始模糊...", "反應變得遲鈍 (輸入延遲)...", "神智不清，分不清方向 (輸入反轉)！"]
@@ -742,7 +747,7 @@ class RestrictedRPSGame:
                     self.add_log(f"[酒精] 玩家喝了一杯威士忌！{status_msg}")
                     return
                 
-            # 優先處理連線玩家互動
+            # 優先處理連線玩家互動 (幽靈也可以與其他玩家互動)
             if not self.is_offline and self._get_interactable_opponent():
                 if event.key == pygame.K_b:
                     self._send_interact_request("battle")
@@ -752,12 +757,13 @@ class RestrictedRPSGame:
                     self._send_interact_request("battle")
                 return
 
-            # 使用快捷鍵進行靠近 NPC 互動
-            closest_npc = self._get_closest_active_npc()
-            if closest_npc:
-                if event.key == pygame.K_e or event.key == pygame.K_RETURN:
-                    self.active_npc = closest_npc
-                    self.state = DIALOGUE
+            # 使用快捷鍵進行靠近 NPC 互動 (限非幽靈玩家)
+            if not self.is_spectator:
+                closest_npc = self._get_closest_active_npc()
+                if closest_npc:
+                    if event.key == pygame.K_e or event.key == pygame.K_RETURN:
+                        self.active_npc = closest_npc
+                        self.state = DIALOGUE
                     self.dialogue_index = 0
                 elif event.key == pygame.K_b:
                     self.active_npc = closest_npc
@@ -909,7 +915,8 @@ class RestrictedRPSGame:
                         "x": self.player_x,
                         "y": self.player_y,
                         "stars": 0,
-                        "cards_count": 0
+                        "cards_count": 0,
+                        "is_spectator": True
                     })
                 self.state = RPG_WALK
                 return
@@ -951,6 +958,10 @@ class RestrictedRPSGame:
         self.npc_selected_card = None
         self.battle_result_msg = ""
         self.battle_anim_timer = 0
+        if self.is_spectator:
+            self.player_cards = {"rock": 1, "paper": 1, "scissors": 1}
+        if self.opponent_id in self.other_players and self.other_players[self.opponent_id].get("is_spectator", False):
+            self.opponent_cards = {"rock": 1, "paper": 1, "scissors": 1}
         
     def _start_trade_mode(self):
         """進入交易板介面"""
@@ -961,6 +972,12 @@ class RestrictedRPSGame:
         }
         self.trade_message = "請在下方調整交易的卡牌數量。"
         self.trade_msg_color = (180, 180, 190)
+        if self.is_spectator:
+            self.player_cards = {"rock": 10, "paper": 10, "scissors": 10}
+            self.player_stars = 10
+        if self.opponent_id in self.other_players and self.other_players[self.opponent_id].get("is_spectator", False):
+            self.opponent_cards = {"rock": 10, "paper": 10, "scissors": 10}
+            self.opponent_stars = 10
 
     def _adjust_trade(self, field, value, max_limit, mouse_pos):
         """微調交易的數字"""
@@ -1170,6 +1187,8 @@ class RestrictedRPSGame:
 
     def _check_game_over_conditions(self):
         """檢查玩家是否達成了終局條件"""
+        if self.is_spectator:
+            return
         total_player_cards = sum(self.player_cards.values())
         
         # 1. 失去所有星星 -> 失敗 (前往地下暗室)
@@ -1184,7 +1203,8 @@ class RestrictedRPSGame:
                     "x": self.player_x,
                     "y": self.player_y,
                     "stars": 0,
-                    "cards_count": 0
+                    "cards_count": 0,
+                    "is_spectator": self.is_spectator
                 })
             self.state = SUMMARY
             return
@@ -1202,7 +1222,8 @@ class RestrictedRPSGame:
                         "x": self.player_x,
                         "y": self.player_y,
                         "stars": self.player_stars,
-                        "cards_count": 0
+                        "cards_count": 0,
+                        "is_spectator": self.is_spectator
                     })
             self.state = SUMMARY
 
@@ -1286,7 +1307,8 @@ class RestrictedRPSGame:
                     "x": self.player_x,
                     "y": self.player_y,
                     "stars": self.player_stars,
-                    "cards_count": sum(self.player_cards.values())
+                    "cards_count": sum(self.player_cards.values()),
+                    "is_spectator": self.is_spectator
                 })
                 self.last_sent_x = self.player_x
                 self.last_sent_y = self.player_y
@@ -1404,10 +1426,12 @@ class RestrictedRPSGame:
                             self.net_manager.send_data({
                                 "action": "sync_pos",
                                 "sender": self.player_name,
+                                "sender_id": getattr(self.net_manager, "player_id", None),
                                 "x": self.player_x,
                                 "y": self.player_y,
                                 "stars": self.player_stars,
-                                "cards_count": 0
+                                "cards_count": 0,
+                                "is_spectator": self.is_spectator
                             })
                     for npc in self.npcs:
                         if npc["status"] == "WANDERING":
@@ -1627,10 +1651,12 @@ class RestrictedRPSGame:
             for opp_name, opp_info in self.other_players.items():
                 opp_stars = opp_info.get("stars", 3)
                 opp_cards = opp_info.get("cards_count", 0)
+                opp_is_spectator = opp_info.get("is_spectator", False)
                 
-                # 如果對手已經出局，則不繪製
-                if opp_stars <= 0 or (opp_cards == 0 and opp_stars < 3):
-                    continue
+                # 如果對手不是幽靈，且已經出局，則不繪製
+                if not opp_is_spectator:
+                    if opp_stars <= 0 or (opp_cards == 0 and opp_stars < 3):
+                        continue
                     
                 opp_x = opp_info.get("x", 800.0)
                 opp_y = opp_info.get("y", 600.0)
@@ -1642,27 +1668,40 @@ class RestrictedRPSGame:
                 dist_mouse = math.hypot(mouse_pos[0] - opp_scr_x, mouse_pos[1] - opp_scr_y)
                 opp_hovered = (dist_mouse < CHAR_RADIUS + 5)
                 
-                # 靠近時亮起互動提示圈 (僅在我方不是幽靈時)
+                # 靠近時亮起互動提示圈
                 dist_player = math.hypot(opp_x - self.player_x, opp_y - self.player_y)
-                is_near_opp = (dist_player < 65) and not self.is_spectator
+                is_near_opp = (dist_player < 65)
                 
                 if is_near_opp:
                     pygame.draw.circle(surface, (100, 255, 100), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 8, width=1)
                     
-                if opp_hovered and not self.is_spectator:
+                if opp_hovered:
                     pygame.draw.circle(surface, (255, 255, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 4, width=2)
                     
-                # 本體
-                pygame.draw.circle(surface, (100, 180, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS)
-                pygame.draw.circle(surface, (10, 10, 15), (opp_scr_x, opp_scr_y), CHAR_RADIUS, width=1)
-                
-                # 名字與星星
                 opp_disp_name = self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown"))
-                lbl_opp = get_font(12, bold=True).render(opp_disp_name, True, (100, 180, 255))
-                surface.blit(lbl_opp, lbl_opp.get_rect(center=(opp_scr_x, opp_scr_y - CHAR_RADIUS - 12)))
                 
-                lbl_opp_st = get_font(10).render(f"⭐ {opp_stars}", True, (245, 220, 90))
-                surface.blit(lbl_opp_st, lbl_opp_st.get_rect(center=(opp_scr_x, opp_scr_y + CHAR_RADIUS + 12)))
+                if opp_is_spectator:
+                    # 幽靈對手：半透明繪製
+                    ghost_surf = pygame.Surface((CHAR_RADIUS*2 + 8, CHAR_RADIUS*2 + 8), pygame.SRCALPHA)
+                    pygame.draw.circle(ghost_surf, (100, 180, 255, 120), (CHAR_RADIUS + 4, CHAR_RADIUS + 4), CHAR_RADIUS + 2, width=2)
+                    pygame.draw.circle(ghost_surf, (22, 28, 45, 100), (CHAR_RADIUS + 4, CHAR_RADIUS + 4), CHAR_RADIUS)
+                    lbl_g = get_font(9, bold=True).render("GHOST", True, (100, 180, 255, 180))
+                    ghost_surf.blit(lbl_g, lbl_g.get_rect(center=(CHAR_RADIUS + 4, CHAR_RADIUS + 4)))
+                    surface.blit(ghost_surf, (opp_scr_x - CHAR_RADIUS - 4, opp_scr_y - CHAR_RADIUS - 4))
+                    
+                    lbl_opp = get_font(12, bold=True).render(opp_disp_name, True, (100, 180, 255, 180))
+                    surface.blit(lbl_opp, lbl_opp.get_rect(center=(opp_scr_x, opp_scr_y - CHAR_RADIUS - 12)))
+                else:
+                    # 本體
+                    pygame.draw.circle(surface, (100, 180, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS)
+                    pygame.draw.circle(surface, (10, 10, 15), (opp_scr_x, opp_scr_y), CHAR_RADIUS, width=1)
+                    
+                    # 名字與星星
+                    lbl_opp = get_font(12, bold=True).render(opp_disp_name, True, (100, 180, 255))
+                    surface.blit(lbl_opp, lbl_opp.get_rect(center=(opp_scr_x, opp_scr_y - CHAR_RADIUS - 12)))
+                    
+                    lbl_opp_st = get_font(10).render(f"⭐ {opp_stars}", True, (245, 220, 90))
+                    surface.blit(lbl_opp_st, lbl_opp_st.get_rect(center=(opp_scr_x, opp_scr_y + CHAR_RADIUS + 12)))
 
         # 5. 繪製玩家主角
         p_scr_x = int(self.player_x - self.camera_x)
@@ -1692,26 +1731,25 @@ class RestrictedRPSGame:
             surface.blit(bar_t_s, bar_t_s.get_rect(center=bar_tip_rect.center))
         
         # 6. 繪製快捷互動按鈕提示 (若靠近某 NPC 或對手玩家)
-        if not self.is_spectator:
-            if not self.is_offline and self._get_interactable_opponent():
+        if not self.is_offline and self._get_interactable_opponent():
+            tip_rect = pygame.Rect(350, 440, 300, 32)
+            pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
+            pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
+            
+            if self.sent_request:
+                t_s = get_font(13).render(f"已發送 {self.sent_request} 邀請，等待對手回應...", True, (220, 255, 220))
+            else:
+                t_s = get_font(13).render(f"靠近 {self.opponent_name}！按 [B]對決 | [T]交易", True, (220, 255, 220))
+            surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
+        elif not self.is_spectator:
+            closest_npc = self._get_closest_active_npc()
+            if closest_npc:
                 tip_rect = pygame.Rect(350, 440, 300, 32)
                 pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
                 pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
                 
-                if self.sent_request:
-                    t_s = get_font(13).render(f"已發送 {self.sent_request} 邀請，等待對手回應...", True, (220, 255, 220))
-                else:
-                    t_s = get_font(13).render(f"靠近 {self.opponent_name}！按 [B]對決 | [T]交易", True, (220, 255, 220))
+                t_s = get_font(13).render(f"靠近 {closest_npc['name']}！按 [ENTER/E]對話 | [B]對戰 | [T]交易", True, (220, 255, 220))
                 surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
-            else:
-                closest_npc = self._get_closest_active_npc()
-                if closest_npc:
-                    tip_rect = pygame.Rect(350, 440, 300, 32)
-                    pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
-                    pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
-                    
-                    t_s = get_font(13).render(f"靠近 {closest_npc['name']}！按 [ENTER/E]對話 | [B]對戰 | [T]交易", True, (220, 255, 220))
-                    surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
             
         # 6. 右下角即時對決動態日誌面板 (可被切換隱藏以避免阻擋玩家視野)
         if self.show_logs:
