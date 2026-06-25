@@ -1262,22 +1262,23 @@ class RestrictedRPSGame:
             return
         total_player_cards = sum(self.player_cards.values())
         
-        # 1. 失去所有星星 -> 失敗 (前往地下暗室)
-        if self.player_stars <= 0:
-            self.player_stars = 0
-            self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
-            self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
+        # 1. 優先檢查是否沒有剩餘手牌
+        if total_player_cards == 0:
+            # 沒有手牌時才檢查星數是否大於等於 3
+            if self.player_stars >= 3:
+                self.add_log(f"[通關] {self.player_name}卡牌已用罄且持有 {self.player_stars} 顆星，順利清債通關！")
+            else:
+                self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
+                self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
             self._sync_local_resources_to_net()
             self.state = SUMMARY
             return
             
-        # 2. 消耗所有卡牌 -> 進行檢算
-        if total_player_cards == 0:
-            if self.player_stars < 3:
-                self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
-                self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
-            else:
-                self.add_log(f"[通關] {self.player_name}卡牌已用罄且持有 {self.player_stars} 顆星，順利清債通關！")
+        # 2. 若還有手牌，但失去所有星星，則失敗
+        if self.player_stars <= 0:
+            self.player_stars = 0
+            self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
+            self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
             self._sync_local_resources_to_net()
             self.state = SUMMARY
 
