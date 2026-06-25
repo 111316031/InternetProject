@@ -27,6 +27,7 @@ DIALOGUE = 2
 TRADE = 3
 BATTLE = 4
 SUMMARY = 5
+FINAL_SUMMARY = 6
 
 # 角色半徑
 CHAR_RADIUS = 18
@@ -53,6 +54,7 @@ class RestrictedRPSGame:
         self.game_manager = game_manager  # 外部主狀態機 EcardGame 的引用
         self.net_manager: Any = net_manager
         self.is_offline = is_offline
+        self.is_spectator = False
         
         # 遊戲初始化設定
         self.player_count = 8  # 預設自選人數為 8 人
@@ -268,10 +270,23 @@ class RestrictedRPSGame:
             if sender and sender != self.player_name:
                 if sender not in self.other_players:
                     self.other_players[sender] = {}
+                old_stars = self.other_players[sender].get("stars", 3)
+                old_cards_count = self.other_players[sender].get("cards_count", 12)
+                
+                new_stars = data.get("stars", 3)
+                new_cards_count = data.get("cards_count", 15)
+                
                 self.other_players[sender]["x"] = data.get("x", 800.0)
                 self.other_players[sender]["y"] = data.get("y", 600.0)
-                self.other_players[sender]["stars"] = data.get("stars", 3)
-                self.other_players[sender]["cards_count"] = data.get("cards_count", 15)
+                self.other_players[sender]["stars"] = new_stars
+                self.other_players[sender]["cards_count"] = new_cards_count
+                
+                # Check elimination of remote player
+                if old_stars > 0 and (new_stars <= 0 or (new_cards_count == 0 and new_stars < 3)):
+                    if not self.other_players[sender].get("logged_lose", False):
+                        self.add_log(f"[出局] {sender}被黑衣人抓走了！")
+                        self.other_players[sender]["logged_lose"] = True
+                        self.other_players[sender]["cards_count"] = 0
                 
                 # 為了向下相容，將最新移動的玩家暫存為主要對手
                 self.opponent_name = sender
@@ -280,6 +295,15 @@ class RestrictedRPSGame:
                 self.opponent_stars = self.other_players[sender]["stars"]
             
         elif action == "interact_req":
+            if self.is_spectator or self.player_stars <= 0:
+                self.net_manager.send_data({
+                    "action": "interact_resp",
+                    "sender": self.player_name,
+                    "target": sender,
+                    "type": data.get("type"),
+                    "accepted": False
+                })
+                return
             req_type = data.get("type")
             self.pending_request = {"type": req_type, "sender": sender}
             self.opponent_name = sender
@@ -552,6 +576,8 @@ class RestrictedRPSGame:
             self._handle_battle_events(event, mouse_pos)
         elif self.state == SUMMARY:
             self._handle_summary_events(event, mouse_pos)
+        elif self.state == FINAL_SUMMARY:
+            self._handle_final_summary_events(event, mouse_pos)
 
     def _handle_setup_events(self, event, mouse_pos):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -580,6 +606,22 @@ class RestrictedRPSGame:
                 self.game_manager.game_phase = -1  # LOBBY
 
     def _handle_rpg_events(self, event, mouse_pos):
+        if self.is_spectator:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
+                    if not self.is_offline and self.net_manager:
+                        self.net_manager.disconnect()
+                    self.cleanup()
+                    self.game_manager.game_phase = -1  # LOBBY
+                    return
+                if "btn_toggle_logs" in self.btn_rects and self.btn_rects["btn_toggle_logs"].collidepoint(mouse_pos):
+                    self.show_logs = not self.show_logs
+                    return
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_l:
+                    self.show_logs = not self.show_logs
+            return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 處理連線邀請點擊
             if self.pending_request:
@@ -836,6 +878,29 @@ class RestrictedRPSGame:
 
     def _handle_summary_events(self, event, mouse_pos):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if "btn_enter_spectator" in self.btn_rects and self.btn_rects["btn_enter_spectator"].collidepoint(mouse_pos):
+                self.is_spectator = True
+                self.player_stars = 0
+                self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.send_data({
+                        "action": "sync_pos",
+                        "sender": self.player_name,
+                        "x": self.player_x,
+                        "y": self.player_y,
+                        "stars": 0,
+                        "cards_count": 0
+                    })
+                self.state = RPG_WALK
+                return
+            if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.disconnect()
+                self.cleanup()
+                self.game_manager.game_phase = -1  # LOBBY
+
+    def _handle_final_summary_events(self, event, mouse_pos):
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             if "btn_back_lobby" in self.btn_rects and self.btn_rects["btn_back_lobby"].collidepoint(mouse_pos):
                 if not self.is_offline and self.net_manager:
                     self.net_manager.disconnect()
@@ -1089,18 +1154,41 @@ class RestrictedRPSGame:
         
         # 1. 失去所有星星 -> 失敗 (前往地下暗室)
         if self.player_stars <= 0:
+            self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
+            self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
+            if not self.is_offline and self.net_manager:
+                self.net_manager.send_data({
+                    "action": "sync_pos",
+                    "sender": self.player_name,
+                    "x": self.player_x,
+                    "y": self.player_y,
+                    "stars": 0,
+                    "cards_count": 0
+                })
             self.state = SUMMARY
             return
             
         # 2. 消耗所有卡牌 -> 進行檢算
         if total_player_cards == 0:
+            if self.player_stars < 3:
+                self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
+                self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
+                if not self.is_offline and self.net_manager:
+                    self.net_manager.send_data({
+                        "action": "sync_pos",
+                        "sender": self.player_name,
+                        "x": self.player_x,
+                        "y": self.player_y,
+                        "stars": self.player_stars,
+                        "cards_count": 0
+                    })
             self.state = SUMMARY
 
     # ==========================================
     # 更新循環 (Update Loops)
     # ==========================================
     def update(self, dt, mouse_pos):
-        if self.state == RPG_WALK:
+        if self.state in (RPG_WALK, DIALOGUE, TRADE, BATTLE):
             self._update_rpg_exploration(dt, mouse_pos)
         else:
             self.keys_pressed.clear()
@@ -1118,14 +1206,15 @@ class RestrictedRPSGame:
             speed *= 2.0
 
         vx_raw, vy_raw = 0.0, 0.0
-        if pygame.K_w in self.keys_pressed or pygame.K_UP in self.keys_pressed:
-            vy_raw = -speed
-        if pygame.K_s in self.keys_pressed or pygame.K_DOWN in self.keys_pressed:
-            vy_raw = speed
-        if pygame.K_a in self.keys_pressed or pygame.K_LEFT in self.keys_pressed:
-            vx_raw = -speed
-        if pygame.K_d in self.keys_pressed or pygame.K_RIGHT in self.keys_pressed:
-            vx_raw = speed
+        if self.state == RPG_WALK:
+            if pygame.K_w in self.keys_pressed or pygame.K_UP in self.keys_pressed:
+                vy_raw = -speed
+            if pygame.K_s in self.keys_pressed or pygame.K_DOWN in self.keys_pressed:
+                vy_raw = speed
+            if pygame.K_a in self.keys_pressed or pygame.K_LEFT in self.keys_pressed:
+                vx_raw = -speed
+            if pygame.K_d in self.keys_pressed or pygame.K_RIGHT in self.keys_pressed:
+                vx_raw = speed
 
         # Apply input direction reversal if 5 or more drinks
         if self.drink_count >= 5:
@@ -1246,14 +1335,16 @@ class RestrictedRPSGame:
                 npc_total_cards = sum(npc["cards"].values())
                 if npc["stars"] <= 0:
                     npc["status"] = "LOSE"
-                    self.add_log(f"[出局] NPC {npc['name']} 失去了所有星星，被黑衣人拖至地獄！")
+                    npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
+                    self.add_log(f"[出局] {npc['name']}被黑衣人抓走了！")
                 elif npc_total_cards == 0:
                     if npc["stars"] >= 3:
                         npc["status"] = "SAFE"
                         self.add_log(f"[通關] NPC {npc['name']} 卡牌已用罄且持有 {npc['stars']} 顆星，順利清債通關！")
                     else:
                         npc["status"] = "LOSE"
-                        self.add_log(f"[出局] NPC {npc['name']} 卡牌已用罄但星數不足，被黑衣人拖至地下暗室！")
+                        npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
+                        self.add_log(f"[出局] {npc['name']}被黑衣人抓走了！")
 
         # 5. 背景 NPC 對戰與交易離線模擬 (每 5-6 秒隨機觸發一次，讓星之船活起來)
         if is_host:
@@ -1261,6 +1352,54 @@ class RestrictedRPSGame:
             if self.log_timer >= 5.5:
                 self.log_timer = 0.0
                 self._simulate_npc_clash_log()
+
+        # 6. 檢查終極結束條件 (所有人都結束或是只剩下一個人但手牌沒出完)
+        if self.state in (RPG_WALK, DIALOGUE, TRADE, BATTLE):
+            active_count = 0
+            local_active = False
+            if not self.is_spectator and self.player_stars > 0 and sum(self.player_cards.values()) > 0:
+                local_active = True
+                active_count += 1
+            
+            for opp_name, opp_info in self.other_players.items():
+                opp_stars = opp_info.get("stars", 0)
+                opp_cards = opp_info.get("cards_count", 0)
+                if opp_stars > 0 and opp_cards > 0:
+                    active_count += 1
+                    
+            for npc in self.npcs:
+                if npc["status"] == "WANDERING":
+                    active_count += 1
+                    
+            if active_count <= 1:
+                # 判定最後一個還在場上但是剩下手牌的人為失敗
+                if active_count == 1:
+                    if local_active:
+                        self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
+                        self.add_log(f"[出局] {self.player_name}手牌未出完，被黑衣人抓走了！")
+                        if not self.is_offline and self.net_manager:
+                            self.net_manager.send_data({
+                                "action": "sync_pos",
+                                "sender": self.player_name,
+                                "x": self.player_x,
+                                "y": self.player_y,
+                                "stars": self.player_stars,
+                                "cards_count": 0
+                            })
+                    for npc in self.npcs:
+                        if npc["status"] == "WANDERING":
+                            npc["status"] = "LOSE"
+                            npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
+                            self.add_log(f"[出局] {npc['name']}手牌未出完，被黑衣人抓走了！")
+                    for opp_name, opp_info in self.other_players.items():
+                        opp_stars = opp_info.get("stars", 0)
+                        opp_cards = opp_info.get("cards_count", 0)
+                        if opp_stars > 0 and opp_cards > 0:
+                            if not opp_info.get("logged_lose", False):
+                                self.add_log(f"[出局] {opp_name}手牌未出完，被黑衣人抓走了！")
+                                opp_info["logged_lose"] = True
+                                opp_info["cards_count"] = 0
+                self.state = FINAL_SUMMARY
 
     def _simulate_npc_clash_log(self):
         """在活躍的 NPC 之間隨機模擬一場交易或卡牌對決"""
@@ -1330,6 +1469,8 @@ class RestrictedRPSGame:
             self._draw_battle(surface, mouse_pos)
         elif self.state == SUMMARY:
             self._draw_summary(surface, mouse_pos)
+        elif self.state == FINAL_SUMMARY:
+            self._draw_final_summary(surface, mouse_pos)
             
         # Apply screen blur if 3 or more drinks have been consumed
         if self.drink_count >= 3:
@@ -1461,9 +1602,15 @@ class RestrictedRPSGame:
         # 4. 繪製對手玩家 (如果不是離線模式)
         if not self.is_offline:
             for opp_name, opp_info in self.other_players.items():
+                opp_stars = opp_info.get("stars", 3)
+                opp_cards = opp_info.get("cards_count", 0)
+                
+                # 如果對手已經出局，則不繪製
+                if opp_stars <= 0 or (opp_cards == 0 and opp_stars < 3):
+                    continue
+                    
                 opp_x = opp_info.get("x", 800.0)
                 opp_y = opp_info.get("y", 600.0)
-                opp_stars = opp_info.get("stars", 3)
                 
                 opp_scr_x = int(opp_x - self.camera_x)
                 opp_scr_y = int(opp_y - self.camera_y)
@@ -1472,14 +1619,14 @@ class RestrictedRPSGame:
                 dist_mouse = math.hypot(mouse_pos[0] - opp_scr_x, mouse_pos[1] - opp_scr_y)
                 opp_hovered = (dist_mouse < CHAR_RADIUS + 5)
                 
-                # 靠近時亮起互動提示圈
+                # 靠近時亮起互動提示圈 (僅在我方不是幽靈時)
                 dist_player = math.hypot(opp_x - self.player_x, opp_y - self.player_y)
-                is_near_opp = (dist_player < 65)
+                is_near_opp = (dist_player < 65) and not self.is_spectator
                 
                 if is_near_opp:
                     pygame.draw.circle(surface, (100, 255, 100), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 8, width=1)
                     
-                if opp_hovered:
+                if opp_hovered and not self.is_spectator:
                     pygame.draw.circle(surface, (255, 255, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 4, width=2)
                     
                 # 本體
@@ -1496,14 +1643,23 @@ class RestrictedRPSGame:
         # 5. 繪製玩家主角
         p_scr_x = int(self.player_x - self.camera_x)
         p_scr_y = int(self.player_y - self.camera_y)
-        pygame.draw.circle(surface, (255, 215, 0), (p_scr_x, p_scr_y), CHAR_RADIUS + 2, width=2)
-        pygame.draw.circle(surface, (22, 28, 45), (p_scr_x, p_scr_y), CHAR_RADIUS)
-        # 繪製主角名字
-        lbl_p = get_font(12, bold=True).render("YOU", True, (255, 215, 0))
-        surface.blit(lbl_p, lbl_p.get_rect(center=(p_scr_x, p_scr_y)))
+        if self.is_spectator:
+            # 幽靈模式：半透明繪製
+            ghost_surf = pygame.Surface((CHAR_RADIUS*2 + 8, CHAR_RADIUS*2 + 8), pygame.SRCALPHA)
+            pygame.draw.circle(ghost_surf, (255, 215, 0, 120), (CHAR_RADIUS + 4, CHAR_RADIUS + 4), CHAR_RADIUS + 2, width=2)
+            pygame.draw.circle(ghost_surf, (22, 28, 45, 100), (CHAR_RADIUS + 4, CHAR_RADIUS + 4), CHAR_RADIUS)
+            lbl_p = get_font(11, bold=True).render("GHOST", True, (255, 215, 0, 180))
+            ghost_surf.blit(lbl_p, lbl_p.get_rect(center=(CHAR_RADIUS + 4, CHAR_RADIUS + 4)))
+            surface.blit(ghost_surf, (p_scr_x - CHAR_RADIUS - 4, p_scr_y - CHAR_RADIUS - 4))
+        else:
+            pygame.draw.circle(surface, (255, 215, 0), (p_scr_x, p_scr_y), CHAR_RADIUS + 2, width=2)
+            pygame.draw.circle(surface, (22, 28, 45), (p_scr_x, p_scr_y), CHAR_RADIUS)
+            # 繪製主角名字
+            lbl_p = get_font(12, bold=True).render("YOU", True, (255, 215, 0))
+            surface.blit(lbl_p, lbl_p.get_rect(center=(p_scr_x, p_scr_y)))
         
-        # 吧檯互動提示
-        if self._get_distance_to_bar() < 65:
+        # 吧檯互動提示 (幽靈無法喝酒)
+        if not self.is_spectator and self._get_distance_to_bar() < 65:
             bar_tip_rect = pygame.Rect(350, 400, 300, 32)
             pygame.draw.rect(surface, (15, 15, 20), bar_tip_rect, border_radius=6)
             pygame.draw.rect(surface, (245, 150, 50), bar_tip_rect, width=1, border_radius=6)
@@ -1512,25 +1668,26 @@ class RestrictedRPSGame:
             surface.blit(bar_t_s, bar_t_s.get_rect(center=bar_tip_rect.center))
         
         # 6. 繪製快捷互動按鈕提示 (若靠近某 NPC 或對手玩家)
-        if not self.is_offline and self._get_interactable_opponent():
-            tip_rect = pygame.Rect(350, 440, 300, 32)
-            pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
-            pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
-            
-            if self.sent_request:
-                t_s = get_font(13).render(f"已發送 {self.sent_request} 邀請，等待對手回應...", True, (220, 255, 220))
-            else:
-                t_s = get_font(13).render(f"靠近 {self.opponent_name}！按 [B]對決 | [T]交易", True, (220, 255, 220))
-            surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
-        else:
-            closest_npc = self._get_closest_active_npc()
-            if closest_npc:
+        if not self.is_spectator:
+            if not self.is_offline and self._get_interactable_opponent():
                 tip_rect = pygame.Rect(350, 440, 300, 32)
                 pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
                 pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
                 
-                t_s = get_font(13).render(f"靠近 {closest_npc['name']}！按 [ENTER/E]對話 | [B]對戰 | [T]交易", True, (220, 255, 220))
+                if self.sent_request:
+                    t_s = get_font(13).render(f"已發送 {self.sent_request} 邀請，等待對手回應...", True, (220, 255, 220))
+                else:
+                    t_s = get_font(13).render(f"靠近 {self.opponent_name}！按 [B]對決 | [T]交易", True, (220, 255, 220))
                 surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
+            else:
+                closest_npc = self._get_closest_active_npc()
+                if closest_npc:
+                    tip_rect = pygame.Rect(350, 440, 300, 32)
+                    pygame.draw.rect(surface, (15, 15, 20), tip_rect, border_radius=6)
+                    pygame.draw.rect(surface, (100, 255, 100), tip_rect, width=1, border_radius=6)
+                    
+                    t_s = get_font(13).render(f"靠近 {closest_npc['name']}！按 [ENTER/E]對話 | [B]對戰 | [T]交易", True, (220, 255, 220))
+                    surface.blit(t_s, t_s.get_rect(center=tip_rect.center))
             
         # 6. 右下角即時對決動態日誌面板 (可被切換隱藏以避免阻擋玩家視野)
         if self.show_logs:
@@ -1582,21 +1739,33 @@ class RestrictedRPSGame:
         lbl_cir = get_font(12, bold=True).render("全船流通餘量 (Circulating)", True, (100, 180, 255))
         surface.blit(lbl_cir, (35, 205))
         
-        cir_stars = self.player_stars
-        cir_rock = self.player_cards["rock"]
-        cir_paper = self.player_cards["paper"]
-        cir_scissors = self.player_cards["scissors"]
+        cir_stars = 0
+        cir_rock = 0
+        cir_paper = 0
+        cir_scissors = 0
+        
+        if not self.is_spectator and self.player_stars > 0:
+            cir_stars += self.player_stars
+            cir_rock += self.player_cards["rock"]
+            cir_paper += self.player_cards["paper"]
+            cir_scissors += self.player_cards["scissors"]
+            
         for npc in self.npcs:
             if npc["status"] == "WANDERING":
                 cir_stars += npc["stars"]
                 cir_rock += npc["cards"]["rock"]
                 cir_paper += npc["cards"]["paper"]
                 cir_scissors += npc["cards"]["scissors"]
+                
         if not self.is_offline:
-            cir_stars += self.opponent_stars
-            cir_rock += self.opponent_cards["rock"]
-            cir_paper += self.opponent_cards["paper"]
-            cir_scissors += self.opponent_cards["scissors"]
+            for opp_name, opp_info in self.other_players.items():
+                opp_stars = opp_info.get("stars", 0)
+                if opp_stars > 0:
+                    cir_stars += opp_stars
+                    cards_count = opp_info.get("cards_count", 0)
+                    cir_rock += cards_count // 3
+                    cir_paper += cards_count // 3
+                    cir_scissors += cards_count - (cards_count // 3) * 2
                 
         lbl_cir_stars = get_font(11).render(f"流通星星總數: {cir_stars} 顆", True, (245, 220, 90))
         lbl_cir_cards = get_font(11).render(f"石頭: {cir_rock} 張 | 布: {cir_paper} 張 | 剪刀: {cir_scissors} 張", True, (200, 200, 210))
@@ -1960,7 +2129,7 @@ class RestrictedRPSGame:
         """渲染結算與通關面板"""
         draw_gradient_background(surface, (12, 10, 18), (24, 20, 32))
         
-        is_win = (self.player_stars >= 3)
+        is_win = (self.player_stars >= 3 and sum(self.player_cards.values()) == 0)
         
         # 標題
         title_font = get_font(42, bold=True)
@@ -1978,11 +2147,10 @@ class RestrictedRPSGame:
         lbl_st = get_font(16).render(f"最終擁有星星數量: ⭐  x {self.player_stars}", True, (255, 215, 0))
         surface.blit(lbl_st, (300, 280))
         
-        res_text = "恭喜你！在希望之船埃斯波瓦爾上順利生存下來，債務一筆勾銷，贏回了人生自由。" if is_win else "遺憾... 星星數不足，你已失去一切，將被送往地下設施進行強制勞動。"
+        res_text = "恭喜你！在希望之船埃斯波瓦爾上順利生存下來，債務一筆勾銷，贏回了人生自由。" if is_win else "遺憾... 你已失去一切，將被送往地下設施進行強制勞動。"
         # 自動折行
         words = res_text
         font_res = get_font(13)
-        # 簡單切半繪製
         mid = len(words) // 2
         line1 = words[:mid]
         line2 = words[mid:]
@@ -2004,8 +2172,117 @@ class RestrictedRPSGame:
         lbl_npc_cnt = get_font(12).render(eval_str, True, (130, 130, 140))
         surface.blit(lbl_npc_cnt, (300, 420))
         
-        # 返回遊戲大廳
-        btn_back = pygame.Rect(400, 540, 200, 45)
+        # 按鈕佈局
+        if not is_win:
+            btn_spectator = pygame.Rect(280, 540, 200, 45)
+            bsh = btn_spectator.collidepoint(mouse_pos)
+            draw_button(surface, btn_spectator, "進入上帝視角", (100, 180, 255), (70, 150, 220), (255, 255, 255), bsh, get_font(16, bold=True))
+            self.btn_rects["btn_enter_spectator"] = btn_spectator
+            
+            btn_back = pygame.Rect(520, 540, 200, 45)
+            bh = btn_back.collidepoint(mouse_pos)
+            draw_button(surface, btn_back, "返回遊戲大廳", (45, 45, 50), (65, 65, 75), (220, 220, 220), bh, get_font(16))
+            self.btn_rects["btn_back_lobby"] = btn_back
+        else:
+            btn_back = pygame.Rect(400, 540, 200, 45)
+            bh = btn_back.collidepoint(mouse_pos)
+            draw_button(surface, btn_back, "返回遊戲大廳", (255, 215, 0), (220, 180, 0), (15, 15, 20), bh, get_font(16, bold=True))
+            self.btn_rects["btn_back_lobby"] = btn_back
+
+    def _draw_final_summary(self, surface, mouse_pos):
+        """渲染總結算畫面"""
+        draw_gradient_background(surface, (10, 10, 15), (20, 20, 30))
+        
+        # 標題
+        title_font = get_font(32, bold=True)
+        title_s = title_font.render("★ 遊戲總結算 (Final Scoreboard) ★", True, (240, 200, 110))
+        surface.blit(title_s, title_s.get_rect(center=(500, 60)))
+        
+        # 表格背景
+        table_rect = pygame.Rect(100, 120, 800, 420)
+        pygame.draw.rect(surface, (20, 20, 28), table_rect, border_radius=10)
+        pygame.draw.rect(surface, (45, 45, 55), table_rect, width=1, border_radius=10)
+        
+        # 表頭
+        headers = ["排名", "參賽者名字", "通關狀態", "最終星數", "剩餘手牌"]
+        header_xs = [150, 280, 480, 620, 780]
+        for h, x in zip(headers, header_xs):
+            lbl_h = get_font(14, bold=True).render(h, True, (100, 180, 255))
+            surface.blit(lbl_h, lbl_h.get_rect(center=(x, 150)))
+            
+        pygame.draw.line(surface, (45, 45, 55), (120, 175), (880, 175), width=1)
+        
+        # 準備資料
+        results = []
+        local_cards_left = sum(self.player_cards.values())
+        is_local_safe = (self.player_stars >= 3 and local_cards_left == 0 and not self.is_spectator)
+        results.append({
+            "name": f"{self.player_name} (您)",
+            "status": "SAFE" if is_local_safe else "LOSE",
+            "stars": self.player_stars if not self.is_spectator else 0,
+            "cards": local_cards_left if not self.is_spectator else 0
+        })
+        
+        if not self.is_offline:
+            for opp_name, opp_info in self.other_players.items():
+                opp_stars = opp_info.get("stars", 0)
+                opp_cards = opp_info.get("cards_count", 0)
+                is_opp_safe = (opp_stars >= 3 and opp_cards == 0)
+                results.append({
+                    "name": opp_name,
+                    "status": "SAFE" if is_opp_safe else "LOSE",
+                    "stars": opp_stars,
+                    "cards": opp_cards
+                })
+                
+        for npc in self.npcs:
+            npc_cards = sum(npc["cards"].values())
+            is_npc_safe = (npc["status"] == "SAFE")
+            results.append({
+                "name": f"NPC {npc['name']}",
+                "status": "SAFE" if is_npc_safe else "LOSE",
+                "stars": npc["stars"] if npc["status"] != "LOSE" else 0,
+                "cards": npc_cards if npc["status"] != "LOSE" else 0
+            })
+            
+        results.sort(key=lambda x: (1 if x["status"] == "SAFE" else 0, x["stars"], -x["cards"]), reverse=True)
+        
+        # 繪製表格內容
+        y_start = 200
+        y_spacing = 38
+        for idx, res in enumerate(results[:9]):
+            cy = y_start + idx * y_spacing
+            
+            # 排名
+            rank_str = f"NO.{idx + 1}"
+            rank_color = (255, 215, 0) if idx == 0 else ((200, 200, 200) if idx == 1 else ((180, 110, 50) if idx == 2 else (140, 140, 150)))
+            lbl_rank = get_font(13, bold=True).render(rank_str, True, rank_color)
+            surface.blit(lbl_rank, lbl_rank.get_rect(center=(header_xs[0], cy)))
+            
+            # 名字
+            lbl_name = get_font(13).render(res["name"], True, (240, 240, 245))
+            surface.blit(lbl_name, lbl_name.get_rect(center=(header_xs[1], cy)))
+            
+            # 狀態
+            status_zh = "★ 通關" if res["status"] == "SAFE" else "☠ 出局"
+            status_color = (100, 255, 100) if res["status"] == "SAFE" else (220, 80, 80)
+            lbl_status = get_font(13, bold=True).render(status_zh, True, status_color)
+            surface.blit(lbl_status, lbl_status.get_rect(center=(header_xs[2], cy)))
+            
+            # 星數
+            lbl_stars = get_font(13).render(f"⭐ x {res['stars']}", True, (255, 215, 0))
+            surface.blit(lbl_stars, lbl_stars.get_rect(center=(header_xs[3], cy)))
+            
+            # 剩餘手牌
+            lbl_cards = get_font(13).render(f"{res['cards']} 張", True, (170, 170, 180))
+            surface.blit(lbl_cards, lbl_cards.get_rect(center=(header_xs[4], cy)))
+            
+            # 繪製分隔線
+            if idx < len(results[:9]) - 1:
+                pygame.draw.line(surface, (30, 30, 40), (120, cy + y_spacing // 2), (880, cy + y_spacing // 2), width=1)
+                
+        # 返回遊戲大廳按鈕
+        btn_back = pygame.Rect(400, 570, 200, 45)
         bh = btn_back.collidepoint(mouse_pos)
         draw_button(surface, btn_back, "返回遊戲大廳", (255, 215, 0), (220, 180, 0), (15, 15, 20), bh, get_font(16, bold=True))
         self.btn_rects["btn_back_lobby"] = btn_back
