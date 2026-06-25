@@ -242,6 +242,21 @@ class RestrictedRPSGame:
             return True
         return False
 
+    def _sync_local_resources_to_net(self):
+        if not self.is_offline and self.net_manager:
+            self.net_manager.send_data({
+                "action": "sync_pos",
+                "sender": self.player_name,
+                "sender_id": getattr(self.net_manager, "player_id", None),
+                "x": self.player_x,
+                "y": self.player_y,
+                "stars": self.player_stars,
+                "cards_count": sum(self.player_cards.values()),
+                "is_spectator": self.is_spectator
+            })
+            self.last_sent_x = self.player_x
+            self.last_sent_y = self.player_y
+
     def _get_distance_to_bar(self):
         # Shortest distance from player circle center (self.player_x, self.player_y) to self.bar_rect
         # self.bar_rect is Rect(950, 100, 350, 70)
@@ -429,6 +444,10 @@ class RestrictedRPSGame:
         self.player_cards[self.player_selected_card] -= 1
         self.opponent_cards[self.opponent_selected_card] -= 1
         
+        # 立即在本地更新對手於 other_players 的手牌計數
+        if self.opponent_id in self.other_players:
+            self.other_players[self.opponent_id]["cards_count"] = max(0, self.other_players[self.opponent_id].get("cards_count", 0) - 1)
+        
         p = self.player_selected_card
         o = self.opponent_selected_card
         
@@ -441,12 +460,18 @@ class RestrictedRPSGame:
             self.battle_result_color = (255, 215, 0)
             self.player_stars += 1
             self.opponent_stars -= 1
+            # 立即在本地更新對手的星數
+            if self.opponent_id in self.other_players:
+                self.other_players[self.opponent_id]["stars"] = max(0, self.other_players[self.opponent_id].get("stars", 3) - 1)
             log_msg = f"[對戰] 玩家擊敗 {self.opponent_name}，贏取 1 顆星星！"
         else:
             self.battle_result_msg = f"您輸了... 失去 1 顆星星。"
             self.battle_result_color = (240, 50, 50)
             self.player_stars -= 1
             self.opponent_stars += 1
+            # 立即在本地更新對手的星數
+            if self.opponent_id in self.other_players:
+                self.other_players[self.opponent_id]["stars"] = self.other_players[self.opponent_id].get("stars", 3) + 1
             log_msg = f"[對戰] {self.opponent_name} 擊敗玩家，贏取 1 顆星星！"
             
         self.add_log(log_msg)
@@ -462,8 +487,23 @@ class RestrictedRPSGame:
         self.opponent_cards["scissors"] += self.trade_offer["give_scissors"] - self.trade_offer["want_scissors"]
         self.opponent_stars += self.trade_offer["give_star"] - self.trade_offer["want_star"]
         
+        # 立即在本地更新對手的星數與卡牌計數
+        if self.opponent_id in self.other_players:
+            old_opp_stars = self.other_players[self.opponent_id].get("stars", 3)
+            new_opp_stars = old_opp_stars + self.trade_offer["give_star"] - self.trade_offer["want_star"]
+            self.other_players[self.opponent_id]["stars"] = max(0, new_opp_stars)
+            
+            old_opp_cards = self.other_players[self.opponent_id].get("cards_count", 12)
+            net_cards_change = (
+                (self.trade_offer["give_rock"] - self.trade_offer["want_rock"]) +
+                (self.trade_offer["give_paper"] - self.trade_offer["want_paper"]) +
+                (self.trade_offer["give_scissors"] - self.trade_offer["want_scissors"])
+            )
+            self.other_players[self.opponent_id]["cards_count"] = max(0, old_opp_cards + net_cards_change)
+        
         self.add_log(f"[交易] 玩家與 {self.opponent_name} 完成交易！")
         self.state = RPG_WALK
+        self._sync_local_resources_to_net()
         self._check_game_over_conditions()
 
     def _draw_request_popup(self, surface, mouse_pos):
@@ -919,6 +959,7 @@ class RestrictedRPSGame:
                     self.state = RPG_WALK
                     self.player_selected_card = None
                     self.opponent_selected_card = None
+                    self._sync_local_resources_to_net()
                     self._check_game_over_conditions()
 
     def _handle_summary_events(self, event, mouse_pos):
