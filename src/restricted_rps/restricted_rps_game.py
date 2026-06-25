@@ -424,7 +424,6 @@ class RestrictedRPSGame:
                     
         elif action == "game_over":
             if not self.is_spectator and self.player_stars > 0 and sum(self.player_cards.values()) > 0:
-                self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
                 self.add_log(f"[出局] {self.player_name}手牌未出完，被黑衣人抓走了！")
             self.state = FINAL_SUMMARY
             for npc in self.npcs:
@@ -439,7 +438,6 @@ class RestrictedRPSGame:
                         opp_disp_name = self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown")) if self.net_manager else opp_info.get("name", "Unknown")
                         self.add_log(f"[出局] {opp_disp_name}手牌未出完，被黑衣人抓走了！")
                         opp_info["logged_lose"] = True
-                        opp_info["cards_count"] = 0
                     
         elif action == "broadcast_log":
             msg = data.get("message")
@@ -1277,7 +1275,6 @@ class RestrictedRPSGame:
         # 2. 若還有手牌，但失去所有星星，則失敗
         if self.player_stars <= 0:
             self.player_stars = 0
-            self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
             self.add_log(f"[出局] {self.player_name}被黑衣人抓走了！")
             self._sync_local_resources_to_net()
             self.state = SUMMARY
@@ -1480,7 +1477,6 @@ class RestrictedRPSGame:
                 # 判定最後一個還在場上但是剩下手牌的人為失敗
                 if active_count == 1:
                     if local_active:
-                        self.player_cards = {"rock": 0, "paper": 0, "scissors": 0}
                         self.add_log(f"[出局] {self.player_name}手牌未出完，被黑衣人抓走了！")
                         if not self.is_offline and self.net_manager:
                             self.net_manager.send_data({
@@ -1490,7 +1486,7 @@ class RestrictedRPSGame:
                                 "x": self.player_x,
                                 "y": self.player_y,
                                 "stars": self.player_stars,
-                                "cards_count": 0,
+                                "cards_count": sum(self.player_cards.values()),
                                 "is_spectator": self.is_spectator
                             })
                     for npc in self.npcs:
@@ -1503,9 +1499,9 @@ class RestrictedRPSGame:
                         opp_cards = opp_info.get("cards_count", 0)
                         if opp_stars > 0 and opp_cards > 0:
                             if not opp_info.get("logged_lose", False):
-                                self.add_log(f"[出局] {opp_name}手牌未出完，被黑衣人抓走了！")
+                                opp_disp_name = self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown")) if self.net_manager else opp_info.get("name", "Unknown")
+                                self.add_log(f"[出局] {opp_disp_name}手牌未出完，被黑衣人抓走了！")
                                 opp_info["logged_lose"] = True
-                                opp_info["cards_count"] = 0
                                 
                 # 廣播結束消息 (僅 Host 發送)
                 if is_host and not self.is_offline and self.net_manager:
