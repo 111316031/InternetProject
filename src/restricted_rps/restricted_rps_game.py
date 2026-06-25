@@ -168,10 +168,42 @@ class RestrictedRPSGame:
             self.net_manager.on_receive_message = self.on_net_receive
             # 同步名字
             self.net_manager.send_data({"action": "handshake", "name": self.player_name})
+            # 聯機人數以大廳內所有人類和機器人玩家數量為準
+            self.player_count = len(self.net_manager.room_players)
             
-        # 若是聯機模式，直接跳過設定畫面進入 RPGwalk
+        # 若是聯機模式，直接跳過設定畫面進入 RPGwalk，並動態將大廳的機器人加入成地圖 NPC
         if not self.is_offline:
             self.state = RPG_WALK
+            if self.net_manager and hasattr(self.net_manager, "room_players"):
+                import random
+                used_meta = list(self.npc_pool)
+                random.shuffle(used_meta)
+                meta_idx = 0
+                for p in self.net_manager.room_players:
+                    if p.get("is_bot", False):
+                        valid = False
+                        nx, ny = 0.0, 0.0
+                        while not valid:
+                            nx = float(random.randint(100, self.world_width - 100))
+                            ny = float(random.randint(100, self.world_height - 100))
+                            if not self._check_collision_any(nx, ny, CHAR_RADIUS):
+                                valid = True
+                        meta = used_meta[meta_idx % len(used_meta)]
+                        meta_idx += 1
+                        bot_npc = {
+                            "name": p["name"],
+                            "color": meta["color"],
+                            "desc": "系統大廳陪玩機器人",
+                            "x": nx,
+                            "y": ny,
+                            "vx": float(random.choice([-1, 1]) * random.randint(30, 60)),
+                            "vy": float(random.choice([-1, 1]) * random.randint(30, 60)),
+                            "stars": 3,
+                            "cards": {"rock": 4, "paper": 4, "scissors": 4},
+                            "status": "WANDERING",
+                            "timer": random.uniform(2.0, 5.0)
+                        }
+                        self.npcs.append(bot_npc)
         else:
             self.state = SETUP
 
@@ -636,7 +668,7 @@ class RestrictedRPSGame:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 取消與返回
             if "btn_trade_cancel" in self.btn_rects and self.btn_rects["btn_trade_cancel"].collidepoint(mouse_pos):
-                if not self.is_offline:
+                if not self.is_offline and not self.active_npc:
                     self.net_manager.send_data({
                         "action": "cancel_trade",
                         "sender": self.player_name,
@@ -645,7 +677,7 @@ class RestrictedRPSGame:
                 self.state = RPG_WALK
                 return
             
-            if self.is_offline:
+            if self.is_offline or self.active_npc:
                 # 調節我方提供的物件 (give)
                 self._adjust_trade("give_rock", 1, self.player_cards["rock"], mouse_pos)
                 self._adjust_trade("give_paper", 1, self.player_cards["paper"], mouse_pos)
@@ -712,7 +744,7 @@ class RestrictedRPSGame:
                 # 確定出牌
                 if "btn_battle_confirm" in self.btn_rects and self.btn_rects["btn_battle_confirm"].collidepoint(mouse_pos):
                     if self.player_selected_card:
-                        if not self.is_offline:
+                        if not self.is_offline and not self.active_npc:
                             self.battle_phase = "waiting"
                             self.net_manager.send_data({
                                 "action": "play_card",
@@ -1418,8 +1450,25 @@ class RestrictedRPSGame:
         self.btn_rects["btn_toggle_logs"] = log_btn_rect
         
         # 總人數與在場殘留人數
-        rem_count = sum([1 for n in self.npcs if n["status"] == "WANDERING"]) + 1
-        cnt_text = get_font(14).render(f"在場人數: {rem_count} / {self.player_count} 人", True, (170, 170, 180))
+        if not self.is_offline:
+            # 總人數 = 本地玩家 (1) + 遠端人類玩家 + 機器人
+            total_count = 1 + len(self.other_players) + len(self.npcs)
+            rem_count = 0
+            if self.player_stars > 0:
+                rem_count += 1
+            for opp_info in self.other_players.values():
+                if opp_info.get("stars", 3) > 0:
+                    rem_count += 1
+            for npc in self.npcs:
+                if npc["status"] == "WANDERING":
+                    rem_count += 1
+        else:
+            total_count = self.player_count
+            rem_count = sum([1 for n in self.npcs if n["status"] == "WANDERING"])
+            if self.player_stars > 0:
+                rem_count += 1
+                
+        cnt_text = get_font(14).render(f"在場人數: {rem_count} / {total_count} 人", True, (170, 170, 180))
         surface.blit(cnt_text, (840, 17))
 
     def _draw_dialogue(self, surface, mouse_pos):
@@ -1681,7 +1730,7 @@ class RestrictedRPSGame:
                 
         elif self.battle_phase == "result":
             # 雙方皆揭牌
-            opp_card = self.opponent_selected_card if not self.is_offline else self.npc_selected_card
+            opp_card = self.npc_selected_card if (self.is_offline or self.active_npc) else self.opponent_selected_card
             self._draw_single_card(surface, npc_slot, opp_card, face_up=True)
             self._draw_single_card(surface, player_slot, self.player_selected_card, face_up=True)
             

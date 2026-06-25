@@ -168,6 +168,19 @@ def process_message(client_sock, msg):
                             room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None})
                             print(f"[Server] Player '{name}' joined Room {r_id}")
                             send_room_info_update(room)
+                            
+                            # E-Card 滿 2 人自動開局
+                            if len(room["players"]) == 2:
+                                room["status"] = "PLAYING"
+                                for p in room["players"]:
+                                    if not p["is_bot"]:
+                                        opp_of_p = [x for x in room["players"] if x["name"] != p["name"]][0]
+                                        send_to_player(p, {
+                                            "action": "GAME_START",
+                                            "opponent_name": opp_of_p["name"]
+                                        })
+                                print(f"[Server] E-Card room {r_id} automatically started game.")
+                                
                             joined = True
                             break
                         else:
@@ -182,6 +195,19 @@ def process_message(client_sock, msg):
                                 room["players"].append({"name": name, "is_bot": False, "socket": client_sock, "role": None})
                                 print(f"[Server] Player '{name}' joined Room {r_id}, replacing bot '{bot_p['name']}'")
                                 send_room_info_update(room)
+                                
+                                # 替換機器人後滿 2 人自動開局
+                                if len(room["players"]) == 2:
+                                    room["status"] = "PLAYING"
+                                    for p in room["players"]:
+                                        if not p["is_bot"]:
+                                            opp_of_p = [x for x in room["players"] if x["name"] != p["name"]][0]
+                                            send_to_player(p, {
+                                                "action": "GAME_START",
+                                                "opponent_name": opp_of_p["name"]
+                                            })
+                                    print(f"[Server] E-Card room {r_id} automatically started game after bot replacement.")
+                                    
                                 joined = True
                                 break
                     else:
@@ -325,7 +351,7 @@ def process_message(client_sock, msg):
         if not opp["is_bot"]:
             send_to_player(opp, msg)
 
-    elif action == "play_card":
+    elif action == "play_card" and current_room["game_type"] == "ecard":
         g_state = current_room["game_state"]
         opp = [p for p in current_room["players"] if p["name"] != my_player["name"]][0]
         is_host = (my_player["name"] == current_room["host"])

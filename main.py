@@ -359,10 +359,14 @@ def main():
         action = data.get("action")
         
         if action == "ROOM_INFO_UPDATE":
-            if game.game_phase == LOBBY:
-                game.game_phase = ROOM_LOBBY
-                connection_status_msg = "已進入大廳房間"
-                connection_status_color = (100, 255, 100)
+            if net_manager.game_type == "ecard":
+                connection_status_msg = "已開房，等待對手加入..." if net_manager.is_host else "已連線，等待對手加入..."
+                connection_status_color = (200, 200, 100)
+            else:
+                if game.game_phase == LOBBY:
+                    game.game_phase = ROOM_LOBBY
+                    connection_status_msg = "已進入大廳房間"
+                    connection_status_color = (100, 255, 100)
                 
         elif action == "GAME_START":
             # 遊戲啟動，跳轉進入遊戲對局畫面
