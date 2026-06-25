@@ -431,6 +431,15 @@ class RestrictedRPSGame:
                 if npc["status"] == "WANDERING":
                     npc["status"] = "LOSE"
                     npc["cards"] = {"rock": 0, "paper": 0, "scissors": 0}
+            for opp_name, opp_info in self.other_players.items():
+                opp_stars = opp_info.get("stars", 0)
+                opp_cards = opp_info.get("cards_count", 0)
+                if opp_stars > 0 and opp_cards > 0:
+                    if not opp_info.get("logged_lose", False):
+                        opp_disp_name = self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown")) if self.net_manager else opp_info.get("name", "Unknown")
+                        self.add_log(f"[出局] {opp_disp_name}手牌未出完，被黑衣人抓走了！")
+                        opp_info["logged_lose"] = True
+                        opp_info["cards_count"] = 0
                     
         elif action == "broadcast_log":
             msg = data.get("message")
