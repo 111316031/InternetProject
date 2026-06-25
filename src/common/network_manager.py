@@ -19,6 +19,7 @@ from typing import Callable, Any, Optional
 class NetworkManager:
     def __init__(self):
         self.is_connected = False
+        self.is_connecting = False
         self.is_host = False
         self.server_ip = "127.0.0.1"
         self.server_port = 8888
@@ -66,7 +67,7 @@ class NetworkManager:
             self.connection = None
 
     def connect(self, ip, port):
-        """Client 模式：連線至指定中央伺服器並加入房間"""
+        """Client 模式：非同步在背景連線至指定中央伺服器並加入房間"""
         self.is_host = False
         self.server_ip = ip
         self.server_port = int(port)
@@ -83,30 +84,45 @@ class NetworkManager:
                 self.on_connected()
             return True, "模擬連線成功 (未加載 C 庫)"
             
-        try:
-            py_socket = self.connection.connect_to_server(ip, self.server_port)
-            if py_socket:
-                self.sock = py_socket
-                self.sock.setblocking(False)
-                self._recv_buffer = ""
-                self.is_connected = True
-                
-                # 發送 join_room 訊息給伺服器
-                self.send_data({
-                    "action": "join_room",
-                    "name": self.player_name,
-                    "game_type": self.game_type
-                })
-                
-                if self.on_connected:
-                    self.on_connected()
-                return True, "連線成功"
-            else:
+        def connect_thread():
+            try:
+                self.is_connecting = True
+                py_socket = self.connection.connect_to_server(ip, self.server_port)
+                if py_socket:
+                    # 檢查連線期間是否已手動取消/中斷
+                    if not self.is_connecting:
+                        if self.connection:
+                            self.connection.close_socket(py_socket)
+                        else:
+                            py_socket.close()
+                        return
+                    self.sock = py_socket
+                    self.sock.setblocking(False)
+                    self._recv_buffer = ""
+                    self.is_connected = True
+                    self.is_connecting = False
+                    
+                    self.send_data({
+                        "action": "join_room",
+                        "name": self.player_name,
+                        "game_type": self.game_type
+                    })
+                    
+                    if self.on_connected:
+                        self.on_connected()
+                else:
+                    self.is_connected = False
+                    self.is_connecting = False
+                    if self.on_error:
+                        self.on_error("C 庫連線失敗，返回空套接字")
+            except Exception as e:
                 self.is_connected = False
-                return False, "C 庫連線失敗，返回空套接字"
-        except Exception as e:
-            self.is_connected = False
-            return False, f"呼叫 C 連線函數異常: {str(e)}"
+                self.is_connecting = False
+                if self.on_error:
+                    self.on_error(f"連線伺服器異常: {str(e)}")
+                    
+        threading.Thread(target=connect_thread, daemon=True).start()
+        return True, "正在與伺服器建立連線..."
 
     def host(self, port):
         """HOST 模式：一鍵在背景啟動中央伺服器，並連線至 127.0.0.1 建立房間"""
@@ -173,23 +189,24 @@ class NetworkManager:
 
     def disconnect(self):
         """中斷連線並釋放資源"""
-        if self.is_connected:
-            self.is_connected = False
-            self.is_host = False
-            self.room_id = None
-            self.room_host = None
-            self.room_players = []
-            if self.sock:
-                try:
-                    if self.connection:
-                        self.connection.close_socket(self.sock)
-                    else:
-                        self.sock.close()
-                except Exception:
-                    pass
-                self.sock = None
-            if self.on_disconnected:
-                self.on_disconnected("連線已中斷")
+        was_active = self.is_connected or self.is_connecting
+        self.is_connected = False
+        self.is_connecting = False
+        self.is_host = False
+        self.room_id = None
+        self.room_host = None
+        self.room_players = []
+        if self.sock:
+            try:
+                if self.connection:
+                    self.connection.close_socket(self.sock)
+                else:
+                    self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+        if was_active and self.on_disconnected:
+            self.on_disconnected("連線已中斷")
 
     def send_data(self, data_dict):
         """將資料序列化為 JSON + \\n 發送"""
