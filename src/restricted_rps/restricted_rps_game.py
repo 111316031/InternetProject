@@ -332,6 +332,34 @@ class RestrictedRPSGame:
         elif action == "cancel_trade":
             self.add_log(f"[交易] {self.opponent_name} 取消了交易。")
             self.state = RPG_WALK
+            
+        elif action == "sync_bots":
+            bots_data = data.get("bots", [])
+            for bot_d in bots_data:
+                name = bot_d.get("name")
+                for npc in self.npcs:
+                    if npc["name"] == name:
+                        npc["x"] = bot_d.get("x", npc["x"])
+                        npc["y"] = bot_d.get("y", npc["y"])
+                        npc["stars"] = bot_d.get("stars", npc["stars"])
+                        npc["cards"] = bot_d.get("cards", npc["cards"])
+                        npc["status"] = bot_d.get("status", npc["status"])
+                        break
+                        
+        elif action == "update_bot":
+            bot_name = data.get("bot_name")
+            for npc in self.npcs:
+                if npc["name"] == bot_name:
+                    npc["stars"] = data.get("stars", npc["stars"])
+                    npc["cards"] = data.get("cards", npc["cards"])
+                    break
+                    
+        elif action == "broadcast_log":
+            msg = data.get("message")
+            if msg:
+                self._is_handling_broadcast_log = True
+                self.add_log(msg)
+                self._is_handling_broadcast_log = False
 
     def _resolve_online_battle(self):
         self.battle_phase = "result"
@@ -477,6 +505,16 @@ class RestrictedRPSGame:
         self.logs.append(text)
         if len(self.logs) > 30:
             self.logs.pop(0)
+            
+        # 聯機模式下若自己是 Host，則廣播日誌給其他玩家
+        if not self.is_offline and self.net_manager:
+            if self.net_manager.player_name == self.net_manager.room_host:
+                if not getattr(self, "_is_handling_broadcast_log", False):
+                    self.net_manager.send_data({
+                        "action": "broadcast_log",
+                        "sender": self.player_name,
+                        "message": text
+                    })
 
     # ==========================================
     # 事件處理 (Event Handling)
@@ -934,6 +972,14 @@ class RestrictedRPSGame:
             
             self.add_log(f"[交易] 玩家與 {self.active_npc['name']} 完成交易！")
             self.state = RPG_WALK
+            if not self.is_offline and self.net_manager:
+                self.net_manager.send_data({
+                    "action": "update_bot",
+                    "sender": self.player_name,
+                    "bot_name": self.active_npc["name"],
+                    "stars": self.active_npc["stars"],
+                    "cards": self.active_npc["cards"]
+                })
             self._check_game_over_conditions()
         else:
             # 拒絕交易
@@ -999,6 +1045,16 @@ class RestrictedRPSGame:
             
         self.add_log(log_msg)
         self.battle_phase = "result"
+        
+        # 聯機模式下，同步機器人對戰後的資產更新
+        if not self.is_offline and self.net_manager:
+            self.net_manager.send_data({
+                "action": "update_bot",
+                "sender": self.player_name,
+                "bot_name": self.active_npc["name"],
+                "stars": self.active_npc["stars"],
+                "cards": self.active_npc["cards"]
+            })
 
     def _trans_card(self, ctype):
         if ctype == "rock": return "石頭 (Rock)"
@@ -1078,7 +1134,31 @@ class RestrictedRPSGame:
         self.camera_x = max(0, min(self.camera_x, self.world_width - 1000))
         self.camera_y = max(0, min(self.camera_y, self.world_height - 700))
         
-        # 4. NPC 行為更新與漫遊模擬
+        # 聯機模式下的 Host 負責定期廣播所有機器人的最新座標與資產
+        if not self.is_offline and self.net_manager and self.net_manager.player_name == self.net_manager.room_host:
+            if not hasattr(self, "bot_sync_timer"):
+                self.bot_sync_timer = 0.0
+            self.bot_sync_timer += dt / 1000.0
+            if self.bot_sync_timer >= 0.1: # 每 100 毫秒同步一次
+                self.bot_sync_timer = 0.0
+                bots_info = []
+                for npc in self.npcs:
+                    bots_info.append({
+                        "name": npc["name"],
+                        "x": npc["x"],
+                        "y": npc["y"],
+                        "stars": npc["stars"],
+                        "cards": npc["cards"],
+                        "status": npc["status"]
+                    })
+                self.net_manager.send_data({
+                    "action": "sync_bots",
+                    "sender": self.player_name,
+                    "bots": bots_info
+                })
+        
+        # 4. NPC 行為更新與漫遊模擬 (僅在離線或聯機的 Host 端進行更新)
+        is_host = (self.is_offline or (self.net_manager and self.net_manager.player_name == self.net_manager.room_host))
         for npc in self.npcs:
             if npc["status"] in ("SAFE", "LOSE"):
                 # 如果已經安全通關或出局，就不再漫遊，移至特定安全點
@@ -1086,48 +1166,50 @@ class RestrictedRPSGame:
                     npc["x"], npc["y"] = 150.0, 150.0  # 安全區
                 continue
                 
-            # 更新計時器以隨機轉向
-            npc["timer"] -= (dt / 1000.0)
-            if npc["timer"] <= 0:
-                npc["timer"] = random.uniform(2.0, 5.0)
-                npc["vx"] = float(random.choice([-1, 1]) * random.randint(30, 60))
-                npc["vy"] = float(random.choice([-1, 1]) * random.randint(30, 60))
-                
-            # 移動並執行障礙物碰撞反彈
-            n_new_x = npc["x"] + npc["vx"] * (dt / 1000.0)
-            if not self._check_collision_any(n_new_x, npc["y"], CHAR_RADIUS):
-                npc["x"] = n_new_x
-            else:
-                npc["vx"] = -npc["vx"]
-                
-            n_new_y = npc["y"] + npc["vy"] * (dt / 1000.0)
-            if not self._check_collision_any(npc["x"], n_new_y, CHAR_RADIUS):
-                npc["y"] = n_new_y
-            else:
-                npc["vy"] = -npc["vy"]
-                
-            # 確保不出地圖界限
-            npc["x"] = max(CHAR_RADIUS, min(npc["x"], self.world_width - CHAR_RADIUS))
-            npc["y"] = max(CHAR_RADIUS, min(npc["y"], self.world_height - CHAR_RADIUS))
-            
-            # 定時檢查 NPC 的完賽狀態
-            npc_total_cards = sum(npc["cards"].values())
-            if npc["stars"] <= 0:
-                npc["status"] = "LOSE"
-                self.add_log(f"[出局] NPC {npc['name']} 失去了所有星星，被黑衣人拖至地獄！")
-            elif npc_total_cards == 0:
-                if npc["stars"] >= 3:
-                    npc["status"] = "SAFE"
-                    self.add_log(f"[通關] NPC {npc['name']} 卡牌已用罄且持有 {npc['stars']} 顆星，順利清債通關！")
+            if is_host:
+                # 更新計時器以隨機轉向
+                npc["timer"] -= (dt / 1000.0)
+                if npc["timer"] <= 0:
+                    npc["timer"] = random.uniform(2.0, 5.0)
+                    npc["vx"] = float(random.choice([-1, 1]) * random.randint(30, 60))
+                    npc["vy"] = float(random.choice([-1, 1]) * random.randint(30, 60))
+                    
+                # 移動並執行障礙物碰撞反彈
+                n_new_x = npc["x"] + npc["vx"] * (dt / 1000.0)
+                if not self._check_collision_any(n_new_x, npc["y"], CHAR_RADIUS):
+                    npc["x"] = n_new_x
                 else:
+                    npc["vx"] = -npc["vx"]
+                    
+                n_new_y = npc["y"] + npc["vy"] * (dt / 1000.0)
+                if not self._check_collision_any(npc["x"], n_new_y, CHAR_RADIUS):
+                    npc["y"] = n_new_y
+                else:
+                    npc["vy"] = -npc["vy"]
+                    
+                # 確保不出地圖界限
+                npc["x"] = max(CHAR_RADIUS, min(npc["x"], self.world_width - CHAR_RADIUS))
+                npc["y"] = max(CHAR_RADIUS, min(npc["y"], self.world_height - CHAR_RADIUS))
+                
+                # 定時檢查 NPC 的完賽狀態
+                npc_total_cards = sum(npc["cards"].values())
+                if npc["stars"] <= 0:
                     npc["status"] = "LOSE"
-                    self.add_log(f"[出局] NPC {npc['name']} 卡牌已用罄但星數不足，被黑衣人拖至地下暗室！")
+                    self.add_log(f"[出局] NPC {npc['name']} 失去了所有星星，被黑衣人拖至地獄！")
+                elif npc_total_cards == 0:
+                    if npc["stars"] >= 3:
+                        npc["status"] = "SAFE"
+                        self.add_log(f"[通關] NPC {npc['name']} 卡牌已用罄且持有 {npc['stars']} 顆星，順利清債通關！")
+                    else:
+                        npc["status"] = "LOSE"
+                        self.add_log(f"[出局] NPC {npc['name']} 卡牌已用罄但星數不足，被黑衣人拖至地下暗室！")
 
         # 5. 背景 NPC 對戰與交易離線模擬 (每 5-6 秒隨機觸發一次，讓星之船活起來)
-        self.log_timer += (dt / 1000.0)
-        if self.log_timer >= 5.5:
-            self.log_timer = 0.0
-            self._simulate_npc_clash_log()
+        if is_host:
+            self.log_timer += (dt / 1000.0)
+            if self.log_timer >= 5.5:
+                self.log_timer = 0.0
+                self._simulate_npc_clash_log()
 
     def _simulate_npc_clash_log(self):
         """在活躍的 NPC 之間隨機模擬一場交易或卡牌對決"""
