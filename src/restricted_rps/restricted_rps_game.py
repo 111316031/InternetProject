@@ -219,11 +219,13 @@ class RestrictedRPSGame:
             self.net_manager.on_receive_message = None
 
     def _get_interactable_opponent(self):
-        if self.is_offline:
+        if self.is_offline or self.is_spectator:
             return False
         nearest_opp_id = None
         min_dist = 65.0
         for opp_id, opp_info in self.other_players.items():
+            if opp_info.get("is_spectator", False):
+                continue
             opp_x = opp_info.get("x", 800.0)
             opp_y = opp_info.get("y", 600.0)
             dist = math.hypot(self.player_x - opp_x, self.player_y - opp_y)
@@ -305,7 +307,7 @@ class RestrictedRPSGame:
                 self.opponent_stars = self.other_players[opp_key]["stars"]
             
         elif action == "interact_req":
-            if not self.is_spectator and self.player_stars <= 0:
+            if self.is_spectator or self.player_stars <= 0:
                 self.net_manager.send_data({
                     "action": "interact_resp",
                     "sender": self.player_name,
@@ -634,6 +636,14 @@ class RestrictedRPSGame:
                 self.show_logs = not self.show_logs
                 return
 
+        # 幽靈玩家限制所有互動
+        if self.is_spectator:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_l:
+                    self.show_logs = not self.show_logs
+            return
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 處理連線邀請點擊
             if self.pending_request:
                 target_id = self.pending_request["sender_id"]
@@ -1668,14 +1678,14 @@ class RestrictedRPSGame:
                 dist_mouse = math.hypot(mouse_pos[0] - opp_scr_x, mouse_pos[1] - opp_scr_y)
                 opp_hovered = (dist_mouse < CHAR_RADIUS + 5)
                 
-                # 靠近時亮起互動提示圈
+                # 靠近時亮起互動提示圈 (僅在雙方皆非幽靈時)
                 dist_player = math.hypot(opp_x - self.player_x, opp_y - self.player_y)
-                is_near_opp = (dist_player < 65)
+                is_near_opp = (dist_player < 65) and not self.is_spectator and not opp_is_spectator
                 
                 if is_near_opp:
                     pygame.draw.circle(surface, (100, 255, 100), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 8, width=1)
                     
-                if opp_hovered:
+                if opp_hovered and not self.is_spectator and not opp_is_spectator:
                     pygame.draw.circle(surface, (255, 255, 255), (opp_scr_x, opp_scr_y), CHAR_RADIUS + 4, width=2)
                     
                 opp_disp_name = self.net_manager.get_player_display_name(opp_name, opp_info.get("name", "Unknown"))
