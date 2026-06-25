@@ -1067,7 +1067,7 @@ class RestrictedRPSGame:
                     "x": self.player_x,
                     "y": self.player_y,
                     "stars": self.player_stars,
-                    "cards_count": len(self.player_cards)
+                    "cards_count": sum(self.player_cards.values())
                 })
                 self.last_sent_x = self.player_x
                 self.last_sent_y = self.player_y
@@ -1540,14 +1540,14 @@ class RestrictedRPSGame:
         """渲染限定剪刀石頭布「星之船交易面板」"""
         draw_gradient_background(surface, (15, 16, 22), (25, 28, 38))
         
-        if not self.is_offline:
-            opp_name = self.opponent_name
-            opp_stars = self.opponent_stars
-            opp_cards = self.opponent_cards
-        else:
+        if self.active_npc:
             opp_name = self.active_npc["name"]
             opp_stars = self.active_npc["stars"]
             opp_cards = self.active_npc["cards"]
+        else:
+            opp_name = self.opponent_name
+            opp_stars = self.opponent_stars
+            opp_cards = self.opponent_cards
 
         # 標題
         title_s = get_font(26, bold=True).render(f"與 {opp_name} 的交涉交易", True, (100, 200, 255))
@@ -1661,11 +1661,11 @@ class RestrictedRPSGame:
         pygame.draw.rect(surface, (20, 20, 28), bubble_rect, border_radius=6)
         pygame.draw.rect(surface, (45, 45, 55), bubble_rect, width=1, border_radius=6)
         
-        if not self.is_offline:
-            quote = f"雙方確認狀態：您: {'[已確認]' if self.trade_self_ready else '[未確認]'} | 對手: {'[已確認]' if self.trade_opp_ready else '[未確認]'}"
-        else:
+        if self.active_npc:
             name = self.active_npc["name"]
-            quote = f"{name} 目前心聲：『我手裡多餘的牌是 {', '.join([self._trans_card(k) for k,v in self.active_npc['cards'].items() if v >= 2]) or '無'}，我需要星數至少高於 3 顆...』"
+            quote = f"{name} 目前心聲：『我手裡多餘的牌是 {', '.join([self._trans_card(k) for k,v in self.active_npc['cards'].items() if v >= 2]) or '無'}』"
+        else:
+            quote = f"雙方確認狀態：您: {'[已確認]' if self.trade_self_ready else '[未確認]'} | 對手: {'[已確認]' if self.trade_opp_ready else '[未確認]'}"
             
         lbl_q = get_font(12).render(quote, True, (160, 160, 175))
         surface.blit(lbl_q, lbl_q.get_rect(center=bubble_rect.center))
@@ -1674,14 +1674,14 @@ class RestrictedRPSGame:
         """渲染經典卡牌對戰 clash 畫面"""
         draw_gradient_background(surface, (15, 15, 25), (30, 25, 40))
         
-        if not self.is_offline:
-            opp_name = self.opponent_name
-            opp_stars = self.opponent_stars
-            opp_tot_cards = sum(self.opponent_cards.values())
-        else:
+        if self.active_npc:
             opp_name = self.active_npc["name"]
             opp_stars = self.active_npc["stars"]
             opp_tot_cards = sum(self.active_npc["cards"].values())
+        else:
+            opp_name = self.opponent_name
+            opp_stars = self.opponent_stars
+            opp_tot_cards = sum(self.opponent_cards.values())
 
         # 標題
         lbl_title = get_font(26, bold=True).render(f"與 {opp_name} 進行限定對決", True, (255, 215, 0))
