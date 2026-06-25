@@ -1545,6 +1545,13 @@ class RestrictedRPSGame:
             show_logs = self.logs[-5:]
             for idx, log in enumerate(show_logs):
                 log_s = get_font(11).render(log, True, (190, 195, 210) if idx == len(show_logs)-1 else (120, 125, 135))
+                log_w, log_h = log_s.get_size()
+                max_log_w = 300
+                if log_w > max_log_w:
+                    try:
+                        log_s = pygame.transform.smoothscale(log_s, (max_log_w, int(log_h * max_log_w / log_w)))
+                    except Exception:
+                        log_s = pygame.transform.scale(log_s, (max_log_w, int(log_h * max_log_w / log_w)))
                 surface.blit(log_s, (665, 515 + idx * 22))
             
         # 7. 左上角玩家手牌狀態面板 (調整高度為 280 以容納全船資源統計)

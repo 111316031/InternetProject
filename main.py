@@ -326,7 +326,7 @@ def draw_room_lobby_scene(surface, mouse_pos):
     if not is_me_host:
         font_tip = get_font(16)
         tip_surf = font_tip.render("請等待房主開始遊戲...", True, (200, 200, 100))
-        surface.blit(tip_surf, (540, 230))
+        surface.blit(tip_surf, (540, 160))
     
     leave_hover = room_leave_rect.collidepoint(mouse_pos)
     draw_button(surface, room_leave_rect, "退出房間 (Leave)", (120, 40, 40), (160, 50, 50), (250, 240, 240), leave_hover, get_font(15, bold=True))
