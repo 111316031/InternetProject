@@ -83,15 +83,18 @@ class RestrictedRPSGame:
         
         # 多人聯機對手字典
         self.other_players = {}
+        self.opponent_id = ""
         if self.net_manager and not self.is_offline:
             for p in self.net_manager.room_players:
                 name = p["name"]
-                if name != self.player_name and not p.get("is_bot", False):
-                    self.other_players[name] = {
+                p_id = p.get("id", name)
+                if p_id != getattr(self.net_manager, "player_id", self.player_name) and not p.get("is_bot", False):
+                    self.other_players[p_id] = {
                         "x": 800.0,
                         "y": 600.0,
                         "stars": 3,
-                        "cards_count": 12
+                        "cards_count": 12,
+                        "name": name
                     }
         self.player_speed = 220.0
         
@@ -218,21 +221,22 @@ class RestrictedRPSGame:
     def _get_interactable_opponent(self):
         if self.is_offline:
             return False
-        nearest_opp = None
+        nearest_opp_id = None
         min_dist = 65.0
-        for opp_name, opp_info in self.other_players.items():
+        for opp_id, opp_info in self.other_players.items():
             opp_x = opp_info.get("x", 800.0)
             opp_y = opp_info.get("y", 600.0)
             dist = math.hypot(self.player_x - opp_x, self.player_y - opp_y)
             if dist < min_dist:
                 min_dist = dist
-                nearest_opp = opp_name
-        if nearest_opp:
-            # 暫存為主要互動對手
-            self.opponent_name = nearest_opp
-            self.opponent_x = self.other_players[nearest_opp]["x"]
-            self.opponent_y = self.other_players[nearest_opp]["y"]
-            self.opponent_stars = self.other_players[nearest_opp]["stars"]
+                nearest_opp_id = opp_id
+        if nearest_opp_id:
+            opp_info = self.other_players[nearest_opp_id]
+            self.opponent_id = nearest_opp_id
+            self.opponent_name = opp_info.get("name", "Unknown")
+            self.opponent_x = opp_info["x"]
+            self.opponent_y = opp_info["y"]
+            self.opponent_stars = opp_info["stars"]
             return True
         return False
 
@@ -254,7 +258,8 @@ class RestrictedRPSGame:
         self.net_manager.send_data({
             "action": "interact_req",
             "sender": self.player_name,
-            "target": self.opponent_name,
+            "sender_id": getattr(self.net_manager, "player_id", None),
+            "target": self.opponent_id,
             "type": req_type
         })
         self.add_log(f"已向 {self.opponent_name} 發送 {req_type} 邀請...")
@@ -267,60 +272,68 @@ class RestrictedRPSGame:
             self.opponent_name = data.get("player_name", self.opponent_name)
             
         elif action == "sync_pos":
-            if sender and sender != self.player_name:
-                if sender not in self.other_players:
-                    self.other_players[sender] = {}
-                old_stars = self.other_players[sender].get("stars", 3)
-                old_cards_count = self.other_players[sender].get("cards_count", 12)
+            sender_id = data.get("sender_id")
+            opp_key = sender_id if sender_id else sender
+            if sender and opp_key != getattr(self.net_manager, "player_id", self.player_name):
+                if opp_key not in self.other_players:
+                    self.other_players[opp_key] = {}
+                old_stars = self.other_players[opp_key].get("stars", 3)
+                old_cards_count = self.other_players[opp_key].get("cards_count", 12)
                 
                 new_stars = data.get("stars", 3)
                 new_cards_count = data.get("cards_count", 15)
                 
-                self.other_players[sender]["x"] = data.get("x", 800.0)
-                self.other_players[sender]["y"] = data.get("y", 600.0)
-                self.other_players[sender]["stars"] = new_stars
-                self.other_players[sender]["cards_count"] = new_cards_count
+                self.other_players[opp_key]["x"] = data.get("x", 800.0)
+                self.other_players[opp_key]["y"] = data.get("y", 600.0)
+                self.other_players[opp_key]["stars"] = new_stars
+                self.other_players[opp_key]["cards_count"] = new_cards_count
+                self.other_players[opp_key]["name"] = sender
                 
                 # Check elimination of remote player
                 if old_stars > 0 and (new_stars <= 0 or (new_cards_count == 0 and new_stars < 3)):
-                    if not self.other_players[sender].get("logged_lose", False):
+                    if not self.other_players[opp_key].get("logged_lose", False):
                         self.add_log(f"[出局] {sender}被黑衣人抓走了！")
-                        self.other_players[sender]["logged_lose"] = True
-                        self.other_players[sender]["cards_count"] = 0
+                        self.other_players[opp_key]["logged_lose"] = True
+                        self.other_players[opp_key]["cards_count"] = 0
                 
                 # 為了向下相容，將最新移動的玩家暫存為主要對手
+                self.opponent_id = opp_key
                 self.opponent_name = sender
-                self.opponent_x = self.other_players[sender]["x"]
-                self.opponent_y = self.other_players[sender]["y"]
-                self.opponent_stars = self.other_players[sender]["stars"]
+                self.opponent_x = self.other_players[opp_key]["x"]
+                self.opponent_y = self.other_players[opp_key]["y"]
+                self.opponent_stars = self.other_players[opp_key]["stars"]
             
         elif action == "interact_req":
             if self.is_spectator or self.player_stars <= 0:
                 self.net_manager.send_data({
                     "action": "interact_resp",
                     "sender": self.player_name,
-                    "target": sender,
+                    "sender_id": getattr(self.net_manager, "player_id", None),
+                    "target": data.get("sender_id"),
                     "type": data.get("type"),
                     "accepted": False
                 })
                 return
             req_type = data.get("type")
-            self.pending_request = {"type": req_type, "sender": sender}
+            self.pending_request = {"type": req_type, "sender": sender, "sender_id": data.get("sender_id")}
+            self.opponent_id = data.get("sender_id")
             self.opponent_name = sender
             
         elif action == "interact_resp":
             req_type = data.get("type")
             accepted = data.get("accepted", False)
+            opp_sender_id = data.get("sender_id")
             if self.sent_request == req_type:
                 self.sent_request = None
                 if accepted:
+                    self.opponent_id = opp_sender_id
                     self.opponent_name = sender
-                    if sender in self.other_players:
-                        self.opponent_stars = self.other_players[sender]["stars"]
+                    if self.opponent_id in self.other_players:
+                        self.opponent_stars = self.other_players[self.opponent_id]["stars"]
                         self.opponent_cards = {
-                            "rock": self.other_players[sender]["cards_count"] // 3,
-                            "paper": self.other_players[sender]["cards_count"] // 3,
-                            "scissors": self.other_players[sender]["cards_count"] // 3
+                            "rock": self.other_players[self.opponent_id]["cards_count"] // 3,
+                            "paper": self.other_players[self.opponent_id]["cards_count"] // 3,
+                            "scissors": self.other_players[self.opponent_id]["cards_count"] // 3
                         }
                     self.add_log(f"{sender} 接受了您的邀請！")
                     if req_type == "battle":
@@ -625,13 +638,14 @@ class RestrictedRPSGame:
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             # 處理連線邀請點擊
             if self.pending_request:
-                target_player = self.pending_request["sender"]
+                target_id = self.pending_request["sender_id"]
                 if "btn_req_accept" in self.btn_rects and self.btn_rects["btn_req_accept"].collidepoint(mouse_pos):
                     req_type = self.pending_request["type"]
                     self.net_manager.send_data({
                         "action": "interact_resp",
                         "sender": self.player_name,
-                        "target": target_player,
+                        "sender_id": getattr(self.net_manager, "player_id", None),
+                        "target": target_id,
                         "type": req_type,
                         "accepted": True
                     })
@@ -646,7 +660,8 @@ class RestrictedRPSGame:
                     self.net_manager.send_data({
                         "action": "interact_resp",
                         "sender": self.player_name,
-                        "target": target_player,
+                        "sender_id": getattr(self.net_manager, "player_id", None),
+                        "target": target_id,
                         "type": req_type,
                         "accepted": False
                     })
@@ -781,7 +796,8 @@ class RestrictedRPSGame:
                     self.net_manager.send_data({
                         "action": "cancel_trade",
                         "sender": self.player_name,
-                        "target": self.opponent_name
+                        "sender_id": getattr(self.net_manager, "player_id", None),
+                        "target": self.opponent_id
                     })
                 self.state = RPG_WALK
                 return
@@ -815,7 +831,8 @@ class RestrictedRPSGame:
                     self.net_manager.send_data({
                         "action": "sync_trade",
                         "sender": self.player_name,
-                        "target": self.opponent_name,
+                        "sender_id": getattr(self.net_manager, "player_id", None),
+                        "target": self.opponent_id,
                         "offer": self.trade_offer
                     })
                     self.trade_self_ready = False
@@ -834,7 +851,8 @@ class RestrictedRPSGame:
                         self.net_manager.send_data({
                             "action": "confirm_trade",
                             "sender": self.player_name,
-                            "target": self.opponent_name
+                            "sender_id": getattr(self.net_manager, "player_id", None),
+                            "target": self.opponent_id
                         })
                         self.trade_message = "已確認提案，等待對手確認..."
                         self.trade_msg_color = (100, 200, 100)
@@ -860,7 +878,8 @@ class RestrictedRPSGame:
                             self.net_manager.send_data({
                                 "action": "play_card",
                                 "sender": self.player_name,
-                                "target": self.opponent_name,
+                                "sender_id": getattr(self.net_manager, "player_id", None),
+                                "target": self.opponent_id,
                                 "card_type": self.player_selected_card
                             })
                             if self.opponent_selected_card:
@@ -886,6 +905,7 @@ class RestrictedRPSGame:
                     self.net_manager.send_data({
                         "action": "sync_pos",
                         "sender": self.player_name,
+                        "sender_id": getattr(self.net_manager, "player_id", None),
                         "x": self.player_x,
                         "y": self.player_y,
                         "stars": 0,
@@ -1160,6 +1180,7 @@ class RestrictedRPSGame:
                 self.net_manager.send_data({
                     "action": "sync_pos",
                     "sender": self.player_name,
+                    "sender_id": getattr(self.net_manager, "player_id", None),
                     "x": self.player_x,
                     "y": self.player_y,
                     "stars": 0,
@@ -1177,6 +1198,7 @@ class RestrictedRPSGame:
                     self.net_manager.send_data({
                         "action": "sync_pos",
                         "sender": self.player_name,
+                        "sender_id": getattr(self.net_manager, "player_id", None),
                         "x": self.player_x,
                         "y": self.player_y,
                         "stars": self.player_stars,
@@ -1260,6 +1282,7 @@ class RestrictedRPSGame:
                 self.net_manager.send_data({
                     "action": "sync_pos",
                     "sender": self.player_name,
+                    "sender_id": getattr(self.net_manager, "player_id", None),
                     "x": self.player_x,
                     "y": self.player_y,
                     "stars": self.player_stars,

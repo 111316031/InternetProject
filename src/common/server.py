@@ -61,6 +61,19 @@ def send_to_player_by_name(room, name, data_dict):
                 print(f"[Server] Target send failed to {name}: {e}")
     return False
 
+def send_to_player_by_id(room, player_id, data_dict):
+    """根據唯一 ID (Hash) 將訊息發送給單一玩家"""
+    json_str = json.dumps(data_dict) + "\n"
+    payload = json_str.encode('utf-8')
+    for player in room["players"]:
+        if player.get("id") == player_id and not player["is_bot"] and player["socket"]:
+            try:
+                player["socket"].sendall(payload)
+                return True
+            except Exception as e:
+                print(f"[Server] Target ID send failed to {player_id}: {e}")
+    return False
+
 def send_to_player(player, data_dict):
     if player["is_bot"] or not player["socket"]:
         return
@@ -492,7 +505,8 @@ def process_message(client_sock, msg):
         # 6.1 精準轉發至 target 玩家 (例如 interact_req, interact_resp, trade_xxx)
         target = msg.get("target")
         if target:
-            send_to_player_by_name(current_room, target, msg)
+            if not send_to_player_by_id(current_room, target, msg):
+                send_to_player_by_name(current_room, target, msg)
         else:
             # 6.2 廣播給房間內除了自己以外的所有人類玩家 (例如 sync_pos 座標同步)
             broadcast_to_room(current_room, msg, exclude_sock=client_sock)
