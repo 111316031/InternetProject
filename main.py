@@ -154,7 +154,7 @@ def draw_lobby_scene(surface, mouse_pos):
     # 繪製輸入框
     font_input = get_font(16)
     if connection_mode == "HOST":
-        display_ip = "一鍵啟用中央伺服器 (Host)"
+        display_ip = "一鍵啟用伺服器 (Host)"
         draw_input_box(surface, ip_input_rect, display_ip, False, "主機 IP 位址 (Host)", font_input)
     else:
         draw_input_box(surface, ip_input_rect, server_ip, (active_input_field == "IP" and connection_mode == "CLIENT"), "伺服器 IP 位址 (Host)", font_input)

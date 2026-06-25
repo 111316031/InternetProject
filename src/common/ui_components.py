@@ -101,6 +101,14 @@ def draw_input_box(surface, rect, text, is_active, label_text, font):
     
     # 渲染輸入文字
     txt_surf = font.render(text, True, (255, 255, 255))
+    txt_w, txt_h = txt_surf.get_size()
+    max_w = rect_obj.width - 16
+    if txt_w > max_w:
+        try:
+            txt_surf = pygame.transform.smoothscale(txt_surf, (max_w, int(txt_h * max_w / txt_w)))
+        except Exception:
+            txt_surf = pygame.transform.scale(txt_surf, (max_w, int(txt_h * max_w / txt_w)))
+            
     surface.blit(txt_surf, (rect_obj.x + 8, rect_obj.y + (rect_obj.height - txt_surf.get_height()) // 2))
     
     # 閃爍游標邏輯 (500 毫秒切換狀態)
