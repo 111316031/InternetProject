@@ -164,6 +164,8 @@ class RestrictedRPSGame:
         self.trade_self_ready = False
         self.trade_opp_ready = False
         
+        self.drink_count = 0
+        
         if self.net_manager and not self.is_offline:
             self.net_manager.on_receive_message = self.on_net_receive
             # 同步名字
@@ -231,6 +233,17 @@ class RestrictedRPSGame:
             self.opponent_stars = self.other_players[nearest_opp]["stars"]
             return True
         return False
+
+    def _get_distance_to_bar(self):
+        # Shortest distance from player circle center (self.player_x, self.player_y) to self.bar_rect
+        # self.bar_rect is Rect(950, 100, 350, 70)
+        left, top, right, bottom = 950, 100, 1300, 170
+        cx = max(left, min(self.player_x, right))
+        cy = max(top, min(self.player_y, bottom))
+        
+        dx = self.player_x - cx
+        dy = self.player_y - cy
+        return math.hypot(dx, dy)
 
     def _send_interact_request(self, req_type):
         if self.sent_request:
@@ -663,6 +676,15 @@ class RestrictedRPSGame:
                 self.show_logs = not self.show_logs
                 return
                 
+            # 吧檯喝酒互動
+            if self._get_distance_to_bar() < 65:
+                if event.key == pygame.K_SPACE:
+                    self.drink_count += 1
+                    drunk_status = ["", "移速提升 1.5 倍！", "移速提升 2.0 倍！", "視線開始模糊...", "反應變得遲鈍 (輸入延遲)...", "神智不清，分不清方向 (輸入反轉)！"]
+                    status_msg = drunk_status[self.drink_count] if self.drink_count < len(drunk_status) else "你已經徹底醉倒了！"
+                    self.add_log(f"[酒精] 玩家喝了一杯威士忌！{status_msg}")
+                    return
+                
             # 優先處理連線玩家互動
             if not self.is_offline and self._get_interactable_opponent():
                 if event.key == pygame.K_b:
@@ -1084,16 +1106,45 @@ class RestrictedRPSGame:
             self.keys_pressed.clear()
 
     def _update_rpg_exploration(self, dt, mouse_pos):
+        if not hasattr(self, "elapsed_time"):
+            self.elapsed_time = 0.0
+        self.elapsed_time += dt
+
         # 1. 玩家鍵盤控制移動 (支援 WASD & 方向鍵)
-        vx, vy = 0.0, 0.0
+        speed = self.player_speed
+        if self.drink_count == 1:
+            speed *= 1.5
+        elif self.drink_count >= 2:
+            speed *= 2.0
+
+        vx_raw, vy_raw = 0.0, 0.0
         if pygame.K_w in self.keys_pressed or pygame.K_UP in self.keys_pressed:
-            vy = -self.player_speed
+            vy_raw = -speed
         if pygame.K_s in self.keys_pressed or pygame.K_DOWN in self.keys_pressed:
-            vy = self.player_speed
+            vy_raw = speed
         if pygame.K_a in self.keys_pressed or pygame.K_LEFT in self.keys_pressed:
-            vx = -self.player_speed
+            vx_raw = -speed
         if pygame.K_d in self.keys_pressed or pygame.K_RIGHT in self.keys_pressed:
-            vx = self.player_speed
+            vx_raw = speed
+
+        # Apply input direction reversal if 5 or more drinks
+        if self.drink_count >= 5:
+            vx_raw = -vx_raw
+            vy_raw = -vy_raw
+
+        # Apply input delay if 4 or more drinks
+        if self.drink_count >= 4:
+            if not hasattr(self, "input_history"):
+                self.input_history = []
+            self.input_history.append((self.elapsed_time, vx_raw, vy_raw))
+            target_time = self.elapsed_time - 300.0
+            vx, vy = 0.0, 0.0
+            while self.input_history and self.input_history[0][0] <= target_time:
+                t, vx, vy = self.input_history.pop(0)
+        else:
+            vx, vy = vx_raw, vy_raw
+            if hasattr(self, "input_history"):
+                self.input_history.clear()
             
         # 對角線速度修正
         if vx != 0.0 and vy != 0.0:
@@ -1279,6 +1330,13 @@ class RestrictedRPSGame:
             self._draw_battle(surface, mouse_pos)
         elif self.state == SUMMARY:
             self._draw_summary(surface, mouse_pos)
+            
+        # Apply screen blur if 3 or more drinks have been consumed
+        if self.drink_count >= 3:
+            small_w = surface.get_width() // 8
+            small_h = surface.get_height() // 8
+            small_surf = pygame.transform.smoothscale(surface, (small_w, small_h))
+            pygame.transform.smoothscale(small_surf, (surface.get_width(), surface.get_height()), surface)
 
     def _draw_setup(self, surface, mouse_pos):
         """渲染自選人數設定頁面"""
@@ -1443,6 +1501,15 @@ class RestrictedRPSGame:
         # 繪製主角名字
         lbl_p = get_font(12, bold=True).render("YOU", True, (255, 215, 0))
         surface.blit(lbl_p, lbl_p.get_rect(center=(p_scr_x, p_scr_y)))
+        
+        # 吧檯互動提示
+        if self._get_distance_to_bar() < 65:
+            bar_tip_rect = pygame.Rect(350, 400, 300, 32)
+            pygame.draw.rect(surface, (15, 15, 20), bar_tip_rect, border_radius=6)
+            pygame.draw.rect(surface, (245, 150, 50), bar_tip_rect, width=1, border_radius=6)
+            
+            bar_t_s = get_font(13).render("靠近奢華吧檯區！按 [SPACE] 喝一杯威士忌 🥃", True, (255, 220, 180))
+            surface.blit(bar_t_s, bar_t_s.get_rect(center=bar_tip_rect.center))
         
         # 6. 繪製快捷互動按鈕提示 (若靠近某 NPC 或對手玩家)
         if not self.is_offline and self._get_interactable_opponent():

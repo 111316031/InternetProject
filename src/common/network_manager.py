@@ -52,7 +52,7 @@ class NetworkManager:
         self.on_error: Optional[Callable[[str], None]] = None
         
         # C 連線庫對接
-        self.connection = None
+        self.connection: Any = None
         self.game_type = "ecard"  # "ecard" or "rps"
         self._load_connection_module()
 
