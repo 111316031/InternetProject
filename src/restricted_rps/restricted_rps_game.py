@@ -317,11 +317,17 @@ class RestrictedRPSGame:
                 self.trade_msg_color = (180, 180, 190)
                 
         elif action == "confirm_trade":
-            self.trade_opp_ready = True
-            self.trade_message = f"{self.opponent_name} 已同意此提案，請您確認以完成交易。"
-            self.trade_msg_color = (100, 200, 100)
-            if self.trade_self_ready and self.trade_opp_ready:
-                self._execute_online_trade()
+            give_cards_total = sum([self.trade_offer["give_rock"], self.trade_offer["give_paper"], self.trade_offer["give_scissors"]])
+            want_cards_total = sum([self.trade_offer["want_rock"], self.trade_offer["want_paper"], self.trade_offer["want_scissors"]])
+            if give_cards_total != want_cards_total:
+                self.trade_message = "對手確認了交易，但雙方卡牌總數不一致！"
+                self.trade_msg_color = (220, 80, 80)
+            else:
+                self.trade_opp_ready = True
+                self.trade_message = f"{self.opponent_name} 已同意此提案，請您確認以完成交易。"
+                self.trade_msg_color = (100, 200, 100)
+                if self.trade_self_ready and self.trade_opp_ready:
+                    self._execute_online_trade()
                 
         elif action == "cancel_trade":
             self.add_log(f"[交易] {self.opponent_name} 取消了交易。")
@@ -367,6 +373,7 @@ class RestrictedRPSGame:
         
         self.add_log(f"[交易] 玩家與 {self.opponent_name} 完成交易！")
         self.state = RPG_WALK
+        self._check_game_over_conditions()
 
     def _draw_request_popup(self, surface, mouse_pos):
         draw_rect_alpha(surface, (10, 10, 15, 180), pygame.Rect(0, 0, 1000, 700))
@@ -719,17 +726,23 @@ class RestrictedRPSGame:
                     self.trade_msg_color = (180, 180, 190)
                     
                 if "btn_trade_confirm" in self.btn_rects and self.btn_rects["btn_trade_confirm"].collidepoint(mouse_pos):
-                    self.trade_self_ready = True
-                    self.net_manager.send_data({
-                        "action": "confirm_trade",
-                        "sender": self.player_name,
-                        "target": self.opponent_name
-                    })
-                    self.trade_message = "已確認提案，等待對手確認..."
-                    self.trade_msg_color = (100, 200, 100)
-                    
-                    if self.trade_self_ready and self.trade_opp_ready:
-                        self._execute_online_trade()
+                    give_cards_total = sum([self.trade_offer["give_rock"], self.trade_offer["give_paper"], self.trade_offer["give_scissors"]])
+                    want_cards_total = sum([self.trade_offer["want_rock"], self.trade_offer["want_paper"], self.trade_offer["want_scissors"]])
+                    if give_cards_total != want_cards_total:
+                        self.trade_message = "交易雙方給出與拿到的卡牌總數必須一致！"
+                        self.trade_msg_color = (220, 80, 80)
+                    else:
+                        self.trade_self_ready = True
+                        self.net_manager.send_data({
+                            "action": "confirm_trade",
+                            "sender": self.player_name,
+                            "target": self.opponent_name
+                        })
+                        self.trade_message = "已確認提案，等待對手確認..."
+                        self.trade_msg_color = (100, 200, 100)
+                        
+                        if self.trade_self_ready and self.trade_opp_ready:
+                            self._execute_online_trade()
 
     def _handle_battle_events(self, event, mouse_pos):
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -823,9 +836,16 @@ class RestrictedRPSGame:
 
     def _execute_npc_trade(self):
         """【智慧估值 AI】NPC 評估是否接受玩家提出的交易提案"""
-        # 1. 安全檢查：防止空手套白狼或無效交易
-        give_total = sum([self.trade_offer["give_rock"], self.trade_offer["give_paper"], self.trade_offer["give_scissors"]]) + self.trade_offer["give_star"]
-        want_total = sum([self.trade_offer["want_rock"], self.trade_offer["want_paper"], self.trade_offer["want_scissors"]]) + self.trade_offer["want_star"]
+        # 1. 安全檢查：交易兩邊給出跟拿到的牌總數要一樣
+        give_cards_total = sum([self.trade_offer["give_rock"], self.trade_offer["give_paper"], self.trade_offer["give_scissors"]])
+        want_cards_total = sum([self.trade_offer["want_rock"], self.trade_offer["want_paper"], self.trade_offer["want_scissors"]])
+        if give_cards_total != want_cards_total:
+            self.trade_message = "交易雙方給出與拿到的卡牌總數必須一致！"
+            self.trade_msg_color = (220, 80, 80)
+            return
+
+        give_total = give_cards_total + self.trade_offer["give_star"]
+        want_total = want_cards_total + self.trade_offer["want_star"]
         
         if give_total == 0 and want_total == 0:
             self.trade_message = "無法進行空的交易！"
@@ -918,6 +938,7 @@ class RestrictedRPSGame:
             
             self.add_log(f"[交易] 玩家與 {self.active_npc['name']} 完成交易！")
             self.state = RPG_WALK
+            self._check_game_over_conditions()
         else:
             # 拒絕交易
             if name == "安藤":
