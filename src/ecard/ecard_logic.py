@@ -206,7 +206,7 @@ class EcardGame:
             # 玩家為國王方，電腦為奴隸方
             if p_type == EMPEROR and c_type == CITIZEN:
                 winner = "Player"
-                reason = "國王 駕崩平民！陛下取得了勝利。"
+                reason = "國王 鎮壓平民！陛下取得了勝利。"
             elif p_type == CITIZEN and c_type == SLAVE:
                 winner = "Player"
                 reason = "平民 鎮壓奴隸！玩家防守成功。"
@@ -220,7 +220,7 @@ class EcardGame:
                 reason = "奴隸 逆襲國王！玩家反叛弒君成功。"
             elif p_type == CITIZEN and c_type == EMPEROR:
                 winner = "CPU"
-                reason = "國王 駕崩平民！電腦取得了勝利。"
+                reason = "國王 鎮壓平民！電腦取得了勝利。"
             elif p_type == SLAVE and c_type == CITIZEN:
                 winner = "CPU"
                 reason = "平民 鎮壓奴隸！電腦防守成功。"

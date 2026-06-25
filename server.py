@@ -88,7 +88,7 @@ def evaluate_ecard(host_role, host_card_type, client_card_type):
     if host_role == "Emperor":
         if host_card_type == "Emperor" and client_card_type == "Citizen":
             winner = "host"
-            reason = "國王 駕崩平民！陛下取得了勝利。"
+            reason = "國王 鎮壓平民！陛下取得了勝利。"
         elif host_card_type == "Citizen" and client_card_type == "Slave":
             winner = "host"
             reason = "平民 鎮壓奴隸！玩家防守成功。"
@@ -101,7 +101,7 @@ def evaluate_ecard(host_role, host_card_type, client_card_type):
             reason = "奴隸 逆襲國王！玩家反叛弒君成功。"
         elif host_card_type == "Citizen" and client_card_type == "Emperor":
             winner = "client"
-            reason = "國王 駕崩平民！對手取得了勝利。"
+            reason = "國王 鎮壓平民！對手取得了勝利。"
         elif host_card_type == "Slave" and client_card_type == "Citizen":
             winner = "client"
             reason = "平民 鎮壓奴隸！對手防守成功。"
